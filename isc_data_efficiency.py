@@ -10,7 +10,6 @@ from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 from matplotlib.patches import Patch
 
-# 忽略 openpyxl 样式警告
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # =========================
@@ -127,6 +126,61 @@ class MainWindow(QMainWindow):
         self.summary = {}
         self.init_ui()
 
+    def download_fa_excel(self):
+        if self.timeline.empty:
+            QMessageBox.warning(self, "Warning", "No data to export")
+            return
+
+        date = self.date_combo.currentText()
+        group_filter = self.group_fa.currentText()
+
+        df_day = self.timeline[self.timeline["date"].astype(str) == date].copy()
+        if group_filter != "All Groups":
+            df_day = df_day[df_day["group"] == group_filter]
+
+        export_data = []
+
+        for name, g in df_day.groupby("name"):
+            if g["is_absent"].any():
+                continue
+
+            work_tasks = g[g["type"].isin(["work", "overnight"])].sort_values("start")
+            punch_in = g["start"].min()
+
+            first_task_str = ""
+            wait_str = ""
+
+            if not work_tasks.empty:
+                first_task = work_tasks.iloc[0]["start"]
+                first_task_str = first_task.strftime("%H:%M:%S")
+
+                diff = (first_task - punch_in).total_seconds()
+                wait_sec = max(0, diff)
+
+                mm, ss = divmod(int(wait_sec), 60)
+                hh, mm = divmod(mm, 60)
+                wait_str = f"{hh:02d}:{mm:02d}:{ss:02d}" if hh > 0 else f"{mm}m {ss}s"
+
+            export_data.append([
+                name,
+                g["group"].iloc[0],
+                g["shift"].iloc[0],
+                punch_in.strftime("%H:%M:%S"),
+                first_task_str,
+                wait_str
+            ])
+
+        df_export = pd.DataFrame(export_data, columns=[
+            "Name", "Group", "Shift", "Punch In", "First Task", "Wait"
+        ])
+
+        # 选择保存路径
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Excel", "first_action.xlsx", "*.xlsx")
+
+        if file_path:
+            df_export.to_excel(file_path, index=False)
+            QMessageBox.information(self, "Success", "Exported successfully!")
+
     def init_ui(self):
         main = QWidget(); self.setCentralWidget(main); 
         layout = QVBoxLayout(main)
@@ -143,7 +197,6 @@ class MainWindow(QMainWindow):
         self.date_combo.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.date_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         
-        # 按钮样式
         self.gen_btn.setStyleSheet("""
             QPushButton {
                 background:#2563EB;
@@ -184,10 +237,15 @@ class MainWindow(QMainWindow):
         fa_outer_layout = QVBoxLayout(self.tab_fa)
         fa_ctrl_layout = QHBoxLayout()
         self.group_fa = QComboBox()
+        self.download_btn = QPushButton("Download Excel")
+        self.download_btn.setFixedWidth(150)
+        self.download_btn.clicked.connect(self.download_fa_excel)
         self.group_fa.addItem("All Groups")
         self.group_fa.setFixedWidth(250)
         self.group_fa.currentTextChanged.connect(self.refresh_fa_table)
-        fa_ctrl_layout.addWidget(QLabel("Filter Analysis Group:")); fa_ctrl_layout.addWidget(self.group_fa); fa_ctrl_layout.addStretch()
+        fa_ctrl_layout.addWidget(QLabel("Filter Analysis Group:"))
+        fa_ctrl_layout.addWidget(self.group_fa)
+        fa_ctrl_layout.addWidget(self.download_btn)
         fa_outer_layout.addLayout(fa_ctrl_layout)
 
         self.fa_table = QTableWidget(); self.fa_table.setColumnCount(6)
@@ -219,14 +277,12 @@ class MainWindow(QMainWindow):
         p, _ = QFileDialog.getOpenFileName(self, "iAMS", "", "*.xlsx")
         if p: self.file2 = p; self.label2.setText(os.path.basename(p))
 
-    # --- 修改 3: Generate 增加 Loading 动作 ---
     def generate(self):
         if not hasattr(self, 'file1') or not hasattr(self, 'file2'): return
         
-        # 视觉反馈：禁用并修改按钮文字
         self.gen_btn.setEnabled(False)
         self.gen_btn.setText("⏳ Processing...")
-        QApplication.processEvents() # 强制界面刷新
+        QApplication.processEvents()
 
         try:
             df, df2, group_mapping = load_data(self.file1, self.file2)
@@ -275,7 +331,6 @@ class MainWindow(QMainWindow):
             work_dur = g[g["type"].isin(["work", "overnight"])]["duration"].sum()
             total_dur = g["duration"].sum()
             
-            # --- 修改 4: 存储上下班打卡时间 ---
             self.summary[name] = {
                 "ratio": (work_dur/total_dur*100) if total_dur>0 else 0,
                 "work": work_dur, "total": total_dur,
@@ -323,7 +378,6 @@ class MainWindow(QMainWindow):
                 if j == 5 and row[6] > 1800: item.setForeground(QColor(THEME["danger"])); item.setFont(QFont("Arial", 9, QFont.Weight.Bold))
                 self.fa_table.setItem(i, j, item)
 
-    # --- 修改 1 & 2: 绘图逻辑 (列标题、去黑线、图例) ---
     def draw_chart(self, ax, can, df_s, shift):
         if shift == "morning" and self.ax_right_m: self.ax_right_m.remove(); self.ax_right_m = None
         if shift == "evening" and self.ax_right_e: self.ax_right_e.remove(); self.ax_right_e = None
@@ -337,11 +391,9 @@ class MainWindow(QMainWindow):
             ax.barh(y_map[r["name"]], mdates.date2num(r["end"]) - mdates.date2num(r["start"]), 
                     left=mdates.date2num(r["start"]), color=THEME.get(r["type"], THEME["idle"]), height=0.6)
 
-        # 设置副轴（效率列）
         ax_r = ax.twinx(); ax_r.set_ylim(ax.get_ylim()); ax_r.set_yticks(range(len(names)))
         ax_r.set_yticklabels([f"{self.summary.get(n, {'ratio':0})['ratio']:.1f}% " for n in names], fontsize=9)
         
-        # 修改 1: 在效率列上面增加标题描述
         ax_r.set_ylabel("Work Efficiency %", fontsize=8, color="#64748B", fontweight='bold', labelpad=10)
         ax_r.yaxis.set_label_position("right") 
 
@@ -351,14 +403,12 @@ class MainWindow(QMainWindow):
         ax.set_yticks(range(len(names))); ax.set_yticklabels(names, fontsize=9)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
 
-        # 修改 2: 去掉边界黑线和刻度线
         for side in ['top', 'right', 'bottom', 'left']:
             ax.spines[side].set_visible(False)
             ax_r.spines[side].set_visible(False)
         ax.tick_params(axis='both', which='both', length=0)
         ax_r.tick_params(axis='both', which='both', length=0)
 
-        # 添加图例
         legend_elements = [
             Patch(facecolor=THEME["work"], label='Work'),
             Patch(facecolor=THEME["overnight"], label='Overnight'),
@@ -377,7 +427,6 @@ class MainWindow(QMainWindow):
             if self.hover_cid_e: can.mpl_disconnect(self.hover_cid_e)
             self.hover_cid_e = can.mpl_connect("motion_notify_event", lambda e: self.on_hover(e, ax, names))
 
-    # --- 修改 4: Hover 显示打卡时间 ---
     def on_hover(self, event, ax, names):
         if event.inaxes is None or event.ydata is None:
             QToolTip.hideText(); return
