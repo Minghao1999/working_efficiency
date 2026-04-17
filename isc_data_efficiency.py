@@ -9,6 +9,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 from matplotlib.patches import Patch
+from PyQt6.QtGui import QIcon
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
@@ -26,6 +27,11 @@ THEME = {
     "danger": "#EF4444"
 }
 
+def resource_path(relative_path):
+    import sys, os
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 # =========================
 # 数据逻辑
 # =========================
@@ -118,7 +124,7 @@ def build_timeline(df, df2, group_mapping):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Operations Dashboard v2.0")
+        self.setWindowTitle("WorkSight v2.0")
         self.resize(1450, 900)
         self.ax_right_m = self.ax_right_e = None
         self.hover_cid_m = self.hover_cid_e = None
@@ -442,4 +448,10 @@ class MainWindow(QMainWindow):
                 QToolTip.showText(QCursor.pos(), text)
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv); w = MainWindow(); w.show(); sys.exit(app.exec())
+    app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path("favicon.ico")))
+
+    w = MainWindow()
+    w.show()
+
+    sys.exit(app.exec())
