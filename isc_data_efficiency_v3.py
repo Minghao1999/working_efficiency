@@ -64,6 +64,13 @@ def resource_path(relative_path: str) -> str:
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
+def adjust_work_date(dt):
+        if pd.isna(dt):
+            return None
+        # ✅ 凌晨时间归前一天
+        if dt.hour < 6:
+            return (dt - pd.Timedelta(days=1)).date()
+        return dt.date()
 
 # =========================
 # Data logic
@@ -99,6 +106,25 @@ def load_data(file1, file2):
     df["start"] = pd.to_datetime(df["start"], errors="coerce")
     df["end"] = pd.to_datetime(df["end"], errors="coerce")
 
+    # ✅ 修复 ISC 跨天错误（凌晨任务归到第二天）
+    def fix_isc_datetime(row):
+        start = row["start"]
+        end = row["end"]
+
+        if pd.isna(start) or pd.isna(end):
+            return start, end
+
+        # 👉 如果时间在凌晨（0~6点），说明其实是“第二天”
+        if start.hour < 6:
+            start = start + pd.Timedelta(days=1)
+            end = end + pd.Timedelta(days=1)
+
+        return start, end
+
+    df[["start", "end"]] = df.apply(
+        lambda r: pd.Series(fix_isc_datetime(r)), axis=1
+    )
+
     def identify_name(row):
         emp_no = row["employee_no"]
         if pd.notna(emp_no) and emp_no in mapping:
@@ -109,10 +135,30 @@ def load_data(file1, file2):
 
     df["display_name"] = df.apply(identify_name, axis=1)
     df["type"] = "work"
-    df["date"] = df["start"].dt.date
+    df["work_date"] = df["start"].apply(adjust_work_date)
     return df, df2, group_mapping
 
+def find_no_operation_people(df_isc, df_iams):
+    # ✅ iAMS 有打卡的人
+    iams_valid = df_iams[
+        df_iams["上班时间"].notna() & df_iams["下班时间"].notna()
+    ].copy()
 
+    iams_valid["employee_no"] = iams_valid["employee_no"].astype(str).str.strip()
+
+    # ❗关键1：只按 employee_no 判断，不看 operator
+    isc_valid = df_isc[
+        df_isc["employee_no"].notna()
+    ].copy()
+
+    isc_valid["employee_no"] = isc_valid["employee_no"].astype(str).str.strip()
+
+    isc_emp_set = set(isc_valid["employee_no"])
+
+    # ✅ 差集
+    no_op = iams_valid[~iams_valid["employee_no"].isin(isc_emp_set)].copy()
+
+    return no_op[["employee_no", "real_name", "上班时间", "下班时间"]]
 
 def load_volume_data(file3):
     try:
@@ -177,13 +223,21 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
         if pd.isna(work_start) or pd.isna(work_end):
             continue
 
-        day = work_start.date()
+        day = adjust_work_date(work_start)
         processed_names.add((display_name, day))
-        shift_tag = "morning" if "早" in str(row2.iloc[7]) else "evening"
+        shift_name = str(row2.get("班次名称", ""))
+
+        if "早" in shift_name:
+            shift_tag = "morning"
+        elif "晚" in shift_name:
+            shift_tag = "evening"
+        else:
+            shift_tag = "morning" if work_start.hour < 12 else "evening"
 
         person_tasks = df[
             (df["employee_no"] == emp_no)
-            & (df["start"] < work_end)
+            & (df["work_date"] == day) 
+            & (df["start"] < work_end) 
             & (df["end"] > work_start)
         ].copy()
         person_tasks["type"] = "work"
@@ -225,9 +279,9 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
                 [display_name, day, current_cursor, work_end, "idle", shift_tag, False, group_name]
             )
 
-    d1_dates = set(df["start"].dropna().dt.date.unique())
+    d1_dates = set(df["work_date"].dropna().unique())
     for current_day in sorted(list(d1_dates)):
-        day_tasks_all = df[df["start"].dt.date == current_day]
+        day_tasks_all = df[df["work_date"] == current_day]
         for display_name, group in day_tasks_all.groupby("display_name"):
             if (display_name, current_day) in processed_names:
                 continue
@@ -441,6 +495,10 @@ class MainWindow(QMainWindow):
         upload_top = QHBoxLayout()
 
         title_box = QVBoxLayout()
+        self.ds_toggle_btn = QPushButton("▾")
+        self.ds_toggle_btn.setObjectName("ghostButton")
+        self.ds_toggle_btn.setFixedWidth(30)
+        self.ds_toggle_btn.clicked.connect(self.toggle_data_sources)
         upload_title = QLabel("Data Sources")
         upload_title.setObjectName("sectionTitle")
 
@@ -461,13 +519,15 @@ class MainWindow(QMainWindow):
         self.gen_btn.setMinimumHeight(42)
 
         upload_top.addLayout(title_box, 1)
+        upload_top.addWidget(self.ds_toggle_btn)
         upload_top.addWidget(QLabel("Date"))
         upload_top.addWidget(self.date_combo)
         upload_top.addWidget(self.gen_btn)
 
         upload_layout.addLayout(upload_top)
 
-        grid = QGridLayout()
+        self.upload_grid_widget = QWidget()
+        grid = QGridLayout(self.upload_grid_widget)
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(14)
 
@@ -481,7 +541,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.card3, 1, 0)
         grid.addWidget(self.card4, 1, 1)
 
-        upload_layout.addLayout(grid)
+        upload_layout.addWidget(self.upload_grid_widget)
         root.addWidget(upload_wrap)
 
         # =============================
@@ -493,6 +553,22 @@ class MainWindow(QMainWindow):
 
         outer_kpi_layout = QVBoxLayout(self.kpi_container)
         outer_kpi_layout.setContentsMargins(18, 16, 18, 18)
+        # ✅ KPI header（加按钮的地方）
+        kpi_header = QHBoxLayout()
+
+        kpi_title = QLabel("KPI Dashboard")
+        kpi_title.setObjectName("sectionTitle")
+
+        self.kpi_toggle_btn = QPushButton("▾")
+        self.kpi_toggle_btn.setObjectName("ghostButton")
+        self.kpi_toggle_btn.setFixedWidth(30)
+        self.kpi_toggle_btn.clicked.connect(self.toggle_kpi)
+
+        kpi_header.addWidget(kpi_title)
+        kpi_header.addStretch()
+        kpi_header.addWidget(self.kpi_toggle_btn)
+
+        outer_kpi_layout.addLayout(kpi_header)
 
         self.k_date = self.create_kpi("DATE", "---")
         self.k_workers = self.create_kpi("TOTAL WORKERS", "0")
@@ -500,7 +576,8 @@ class MainWindow(QMainWindow):
         self.k_efficiency_chart = self.create_efficiency_card()
         self.k_vol = self.create_kpi("TOTAL VOLUME", "0")
 
-        kpi_row = QHBoxLayout()
+        self.kpi_row_widget = QWidget()
+        kpi_row = QHBoxLayout(self.kpi_row_widget)
         for w in [
             self.k_date,
             self.k_workers,
@@ -510,7 +587,7 @@ class MainWindow(QMainWindow):
         ]:
             kpi_row.addWidget(w)
 
-        outer_kpi_layout.addLayout(kpi_row)
+        outer_kpi_layout.addWidget(self.kpi_row_widget)
         root.addWidget(self.kpi_container)
 
         # =============================
@@ -520,10 +597,12 @@ class MainWindow(QMainWindow):
         self.tab_m = QWidget()
         self.tab_e = QWidget()
         self.tab_fa = QWidget()
+        self.tab_no_op = QWidget() 
 
         self.tabs.addTab(self.tab_m, "Morning Shift")
         self.tabs.addTab(self.tab_e, "Evening Shift")
         self.tabs.addTab(self.tab_fa, "First Action Analysis")
+        self.tabs.addTab(self.tab_no_op, "No Operation Analysis") 
 
         root.addWidget(self.tabs, 1)
 
@@ -531,7 +610,7 @@ class MainWindow(QMainWindow):
         self.fig_e, self.ax_e, self.can_e, self.ph_e, self.group_e = self.create_gantt_tab(self.tab_e, "evening")
 
         # =============================
-        # First Action Analysis UI（修复）
+        # First Action Analysis UI
         # =============================
         fa_layout = QVBoxLayout(self.tab_fa)
         fa_layout.setContentsMargins(12, 12, 12, 12)
@@ -569,6 +648,42 @@ class MainWindow(QMainWindow):
 
         fa_layout.addWidget(fa_card)
         # =============================
+        # No Operation Analysis UI
+        # =============================
+        no_op_layout = QVBoxLayout(self.tab_no_op)
+        no_op_layout.setContentsMargins(12, 12, 12, 12)
+
+        no_op_card = QFrame()
+        no_op_card.setObjectName("sectionCard")
+        apply_shadow(no_op_card, blur=20, y_offset=6, alpha=18)
+
+        no_op_inner = QVBoxLayout(no_op_card)
+        no_op_inner.setContentsMargins(16, 16, 16, 16)
+        no_op_inner.setSpacing(12)
+
+        title = QLabel("No System Operation Analysis")
+        title.setObjectName("sectionTitle")
+
+        subtitle = QLabel("Employees who clocked in but had no system operations.")
+        subtitle.setObjectName("sectionSubtitle")
+
+        # ✅ 表
+        self.no_op_table = QTableWidget(0, 4)
+        self.no_op_table.setHorizontalHeaderLabels(
+            ["Employee No", "Name", "Clock In", "Clock Out"]
+        )
+
+        self.no_op_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.no_op_table.verticalHeader().setVisible(False)
+        self.no_op_table.setAlternatingRowColors(True)
+        self.no_op_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
+        no_op_inner.addWidget(title)
+        no_op_inner.addWidget(subtitle)
+        no_op_inner.addWidget(self.no_op_table)
+
+        no_op_layout.addWidget(no_op_card)
+        # =============================
         # signals（保持原逻辑）
         # =============================
         self.card1.button.clicked.connect(lambda: self.load_f(1))
@@ -588,6 +703,19 @@ class MainWindow(QMainWindow):
         status = QStatusBar()
         status.showMessage("Ready")
         self.setStatusBar(status)
+
+    def refresh_no_op_table(self):
+        self.no_op_table.setRowCount(0)
+
+        if hasattr(self, "no_op_df") and not self.no_op_df.empty:
+            for _, row in self.no_op_df.iterrows():
+                r = self.no_op_table.rowCount()
+                self.no_op_table.insertRow(r)
+
+                self.no_op_table.setItem(r, 0, QTableWidgetItem(str(row["employee_no"])))
+                self.no_op_table.setItem(r, 1, QTableWidgetItem(str(row["real_name"])))
+                self.no_op_table.setItem(r, 2, QTableWidgetItem(str(row["上班时间"])))
+                self.no_op_table.setItem(r, 3, QTableWidgetItem(str(row["下班时间"])))
 
     def apply_styles(self):
         self.setStyleSheet(
@@ -864,6 +992,8 @@ class MainWindow(QMainWindow):
 
         try:
             df, df2, group_map = load_data(self.file1, self.file2)
+            self.df = df
+            self.df2 = df2
             volume_data = load_volume_data(self.file3) if hasattr(self, "file3") else {}
             break_df = load_break_data(self.file4) if hasattr(self, "file4") else None
 
@@ -902,9 +1032,20 @@ class MainWindow(QMainWindow):
             dates = sorted(self.timeline["date"].astype(str).unique()) if not self.timeline.empty else []
             self.date_combo.blockSignals(True)
             self.date_combo.clear()
-            self.header_date_combo.clear()
 
+            dates = sorted(self.timeline["date"].astype(str).unique())
+
+            self.date_combo.clear()
             self.date_combo.addItems(dates)
+
+            # ✅ 在设置完日期之后再取
+            selected_date = pd.to_datetime(self.date_combo.currentText()).date()
+
+            df2_day = df2[
+                df2["上班时间"].dt.date == selected_date
+            ]
+
+            self.no_op_df = find_no_operation_people(df, df2_day)
             self.header_date_combo.addItems(dates)
             self.date_combo.blockSignals(False)
 
@@ -918,6 +1059,19 @@ class MainWindow(QMainWindow):
             self.gen_btn.setEnabled(True)
 
     def refresh_all(self):
+        # ✅ 每次切换日期重新计算 no operation
+        selected_date = pd.to_datetime(self.date_combo.currentText()).date()
+
+        df2_day = self.df2[
+            self.df2["上班时间"].apply(adjust_work_date) == selected_date
+        ]
+
+        # ✅ 只用当天 ISC 数据
+        df_day_isc = self.df[
+            self.df["work_date"] == selected_date
+        ]
+
+        self.no_op_df = find_no_operation_people(df_day_isc, df2_day)
         date = self.date_combo.currentText()
         if not date or self.timeline.empty:
             return
@@ -948,6 +1102,7 @@ class MainWindow(QMainWindow):
             self.refresh_single_gantt(shift)
 
         self.refresh_fa_table(df_day)
+        self.refresh_no_op_table()
 
     def update_efficiency_donut(self, ratio: float):
         self.eff_fig.clear()
@@ -1192,7 +1347,6 @@ class MainWindow(QMainWindow):
                         item.setForeground(QColor(THEME["success"]))
 
                 self.fa_table.setItem(row_index, col_index, item)
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
