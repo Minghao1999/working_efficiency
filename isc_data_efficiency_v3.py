@@ -71,7 +71,13 @@ def adjust_work_date(dt):
         if dt.hour < 6:
             return (dt - pd.Timedelta(days=1)).date()
         return dt.date()
+import re
 
+def extract_warehouse(name):
+    if pd.isna(name):
+        return "Unknown"
+    match = re.search(r"\d+号仓", str(name))
+    return match.group() if match else str(name)
 # =========================
 # Data logic
 # =========================
@@ -100,11 +106,13 @@ def load_data(file1, file2):
             "operator": "operator",
         }
     )
+    df["warehouse_name"] = df1["warehouse_name"]
     df["employee_no"] = (
         df["employee_no"].astype(str).str.strip().replace(["nan", "None", ""], pd.NA)
     )
     df["start"] = pd.to_datetime(df["start"], errors="coerce")
     df["end"] = pd.to_datetime(df["end"], errors="coerce")
+    
 
     # ✅ 修复 ISC 跨天错误（凌晨任务归到第二天）
     def fix_isc_datetime(row):
@@ -162,13 +170,39 @@ def find_no_operation_people(df_isc, df_iams):
 
 def load_volume_data(file3):
     try:
-        df3 = pd.read_excel(file3)
-        df3.columns = df3.columns.str.strip()
-        time_col = [c for c in df3.columns if "时间" in c or "日期" in c][0]
-        vol_col = [c for c in df3.columns if "件" in c or "数量" in c or "总数" in c][0]
-        df3[time_col] = pd.to_datetime(df3[time_col], errors="coerce").dt.date
-        return df3.groupby(time_col)[vol_col].sum().to_dict()
-    except Exception:
+        df = pd.read_excel(file3)
+        df.columns = df.columns.str.strip()
+
+        # ======================
+        # 1️⃣ 打包完成时间
+        # ======================
+        df['打包完成时间'] = pd.to_datetime(df['打包完成时间'], errors='coerce')
+
+        # ======================
+        # 2️⃣ 过滤取消订单
+        # ======================
+        if '是否取消' in df.columns:
+            df = df[~df['是否取消'].astype(str).str.contains('是')]
+
+        # ======================
+        # 3️⃣ G列件数（第7列）
+        # ======================
+        df['件数'] = pd.to_numeric(df.iloc[:, 6], errors='coerce').fillna(0)
+
+        # ======================
+        # 4️⃣ 按日期分组
+        # ======================
+        df['日期'] = df['打包完成时间'].dt.date
+
+        # ======================
+        # 5️⃣ 汇总
+        # ======================
+        volume_dict = df.groupby('日期')['件数'].sum().to_dict()
+
+        return volume_dict
+
+    except Exception as e:
+        print("Volume读取失败:", e)
         return {}
 
 
@@ -289,7 +323,7 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
             emp_id = display_name.split("(")[-1].strip(")")
             sorted_group = group.sort_values("start")
             first_task_start = sorted_group["start"].min()
-            auto_shift = "morning" if 8 <= first_task_start.hour < 12 else "evening"
+            auto_shift = "morning" if 6 <= first_task_start.hour < 12 else "evening"
 
             for _, task in sorted_group.iterrows():
                 records.append(
@@ -531,10 +565,10 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(14)
 
-        self.card1 = FilePickerCard("ISC Task Data", "Upload ISC data", "Upload ISC")
-        self.card2 = FilePickerCard("iAMS Attendance", "Upload iAMS data", "Upload iAMS")
-        self.card3 = FilePickerCard("Volume Data", "Optional", "Upload Volume")
-        self.card4 = FilePickerCard("Punch Data", "Optional", "Upload Punch")
+        self.card1 = FilePickerCard("ISC Task Data(任务数据)", "Upload ISC data", "Upload ISC")
+        self.card2 = FilePickerCard("iAMS Attendance(班次明细)", "Upload iAMS data", "Upload iAMS")
+        self.card3 = FilePickerCard("Volume Data(出库件量)", "Optional", "Upload Volume")
+        self.card4 = FilePickerCard("Punch Data(打卡流水)", "Optional", "Upload Punch")
 
         grid.addWidget(self.card1, 0, 0)
         grid.addWidget(self.card2, 0, 1)
@@ -570,7 +604,7 @@ class MainWindow(QMainWindow):
 
         outer_kpi_layout.addLayout(kpi_header)
 
-        self.k_date = self.create_kpi("DATE", "---")
+        self.k_date = self.create_kpi("WAREHOUSE", "---")
         self.k_workers = self.create_kpi("TOTAL WORKERS", "0")
         self.k_total_manhours = self.create_kpi("TOTAL WORK-HOURS", "0.0h")
         self.k_efficiency_chart = self.create_efficiency_card()
@@ -930,7 +964,8 @@ class MainWindow(QMainWindow):
         apply_shadow(card, blur=20, y_offset=6, alpha=18)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(16, 16, 16, 16)
-        card_layout.setSpacing(12)
+        card.setMinimumHeight(800)
+        card_layout.setSpacing(0)
 
         top = QHBoxLayout()
         title_box = QVBoxLayout()
@@ -962,9 +997,51 @@ class MainWindow(QMainWindow):
         canvas.setStyleSheet("border: none; background: transparent;")
         canvas.hide()
 
-        card_layout.addWidget(canvas)
+        # ======================
+        # ✅ 新增：独立滚动区域
+        # ======================
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # ======================
+        # scroll 内容
+        # ======================
+        scroll_container = QWidget()
+        scroll_layout = QVBoxLayout(scroll_container)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ✅ 只保留一次
+        scroll_layout.addWidget(canvas)
+
+        scroll_area.setWidget(scroll_container)
+        scroll_area.setMinimumHeight(500) 
+
+        # ======================
+        # 固定时间轴
+        # ======================
+        axis_fig = Figure(figsize=(14, 1.2), dpi=100)
+        axis_canvas = FigureCanvas(axis_fig)
+        axis_canvas.setStyleSheet("background: transparent; border: none;")
+
+        # 保存引用
+        if shift == "morning":
+            self.axis_canvas_m = axis_canvas
+            self.axis_fig_m = axis_fig
+        else:
+            self.axis_canvas_e = axis_canvas
+            self.axis_fig_e = axis_fig
+
+        # ======================
+        # 加入布局（顺序很关键）
+        # ======================
+        card_layout.addWidget(scroll_area)   # ✅ 表（滚动）
+        card_layout.addWidget(axis_canvas)   # ✅ 时间轴（固定）
         card_layout.addWidget(placeholder)
         root.addWidget(card)
+        root.addStretch() 
+        root.addSpacing(50)
         return fig, fig.add_subplot(111), canvas, placeholder, group_combo
 
     def toggle_kpi(self):
@@ -994,6 +1071,13 @@ class MainWindow(QMainWindow):
             df, df2, group_map = load_data(self.file1, self.file2)
             self.df = df
             self.df2 = df2
+            # ======================
+            # ✅ 提取仓库
+            # ======================
+            df["warehouse_short"] = df["warehouse_name"].apply(extract_warehouse)
+
+            # 👉 当前仓库（默认取最多的）
+            self.current_warehouse = df["warehouse_short"].mode()[0]
             volume_data = load_volume_data(self.file3) if hasattr(self, "file3") else {}
             break_df = load_break_data(self.file4) if hasattr(self, "file4") else None
 
@@ -1077,7 +1161,7 @@ class MainWindow(QMainWindow):
             return
         df_day = self.timeline[self.timeline["date"].astype(str) == date]
 
-        self.k_date.val.setText(date)
+        self.k_date.val.setText(self.current_warehouse)
         self.k_workers.val.setText(str(df_day["name"].nunique()))
 
         total_man_hours = df_day["duration"].sum()
@@ -1141,13 +1225,19 @@ class MainWindow(QMainWindow):
         if combo.currentText() != "All Groups":
             df_shift = df_shift[df_shift["group"] == combo.currentText()]
 
-        for name, group in df_shift.groupby("name"):
+        for name in df_shift["name"].unique():
+            group = df_shift[df_shift["name"] == name]
+
             work_duration = group[group["type"].isin(["work", "overnight"])]["duration"].sum()
             total_duration = group["duration"].sum()
+
+            # ✅ 防止空
+            ratio = (work_duration / total_duration * 100) if total_duration > 0 else 0
+
             self.summary[name] = {
-                "ratio": (work_duration / total_duration * 100) if total_duration > 0 else 0,
-                "in": group["start"].min().strftime("%H:%M"),
-                "out": group["end"].max().strftime("%H:%M"),
+                "ratio": ratio,
+                "in": group["start"].min().strftime("%H:%M") if not group.empty else "--",
+                "out": group["end"].max().strftime("%H:%M") if not group.empty else "--",
             }
 
         ax, canvas, placeholder = (
@@ -1176,6 +1266,13 @@ class MainWindow(QMainWindow):
         prev_date_str = prev_date.strftime("%Y-%m-%d")
 
         names = sorted(df_shift["name"].unique(), key=lambda n: self.summary.get(n, {}).get("ratio", 0))
+        # ======================
+        # ✅ 动态高度（关键）
+        # ======================
+        row_height = 0.4   # 每个人高度（可以调 0.3~0.6）
+        fig_height = len(names) * 0.4
+
+        fig.set_size_inches(14, fig_height)  # 宽固定，高动态
         y_map = {name: i for i, name in enumerate(names)}
 
         for _, row in df_shift.iterrows():
@@ -1188,14 +1285,12 @@ class MainWindow(QMainWindow):
                 edgecolor="none",
             )
 
-        ax_right = ax.twinx()
-        ax_right.set_ylim(ax.get_ylim())
-        ax_right.set_yticks(range(len(names)))
-        ax_right.set_yticklabels([""] * len(names))
+        
 
         for i, name in enumerate(names):
             ratio = self.summary.get(name, {}).get("ratio", 0)
             prev_ratio = self.history_ratios.get(prev_date_str, {}).get(name)
+
             arrow = ""
             color = THEME["muted"]
 
@@ -1207,33 +1302,33 @@ class MainWindow(QMainWindow):
                     arrow = " ↓"
                     color = THEME["danger"]
 
-            ax_right.text(
+            # ✅ 用 ax（不是 ax_right）
+            ax.text(
                 1.01,
                 i,
                 f"{ratio:.1f}%",
-                transform=ax_right.get_yaxis_transform(),
+                transform=ax.get_yaxis_transform(),
                 va="center",
                 fontsize=8,
                 color=THEME["text"],
             )
+
             if arrow:
-                ax_right.text(
+                ax.text(
                     1.08,
                     i,
                     arrow,
-                    transform=ax_right.get_yaxis_transform(),
+                    transform=ax.get_yaxis_transform(),
                     va="center",
                     fontsize=9,
                     color=color,
                     fontweight="bold",
                 )
 
-        if shift == "morning":
-            self.ax_right_m = ax_right
-        else:
-            self.ax_right_e = ax_right
+        
 
         ax.set_yticks(range(len(names)))
+        ax.set_ylim(-0.5, len(names) - 0.5)
         ax.set_yticklabels(names, fontsize=8, color=THEME["text"])
         ax.tick_params(axis="x", colors=THEME["muted"], labelsize=8)
         ax.tick_params(axis="y", length=0)
@@ -1241,7 +1336,11 @@ class MainWindow(QMainWindow):
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
         ax.grid(axis="x", color="#E2E8F0", linestyle="--", alpha=0.65)
-
+        # ✅ 限制白班只显示到18:00
+        if shift == "morning":
+            start_time = pd.to_datetime(self.date_combo.currentText() + " 07:00")
+            end_time = pd.to_datetime(self.date_combo.currentText() + " 18:00")
+            ax.set_xlim(start_time, end_time)
         legend_items = [
             Patch(facecolor=THEME["work"], label="Work"),
             Patch(facecolor=THEME["overnight"], label="Overnight"),
@@ -1250,18 +1349,24 @@ class MainWindow(QMainWindow):
         ]
         ax.legend(
             handles=legend_items,
-            loc="center left",
-            bbox_to_anchor=(1.06, 0.92),
+            loc="upper right",
+            bbox_to_anchor=(1.16, 1.0),
             frameon=False,
             fontsize=8,
         )
 
         for side in ["top", "right", "bottom", "left"]:
             ax.spines[side].set_visible(False)
-            ax_right.spines[side].set_visible(False)
 
-        fig.subplots_adjust(left=0.22, right=0.88, top=0.96, bottom=0.1)
+        fig.subplots_adjust(left=0.22, right=0.88, top=0.98, bottom=0.00)        
         canvas.draw_idle()
+        # ======================
+        # ✅ 让内容变高 → 触发滚动
+        # ======================
+        row_height = 30   # 每人高度（像素）
+        total_height = max(400, len(names) * row_height)
+
+        canvas.setMinimumHeight(total_height)
 
         if shift == "morning":
             if self.hover_cid_m:
@@ -1271,23 +1376,55 @@ class MainWindow(QMainWindow):
             if self.hover_cid_e:
                 canvas.mpl_disconnect(self.hover_cid_e)
             self.hover_cid_e = canvas.mpl_connect("motion_notify_event", lambda event: self.on_hover(event, names))
+        # ======================
+        # ✅ 固定时间轴
+        # ======================
+        axis_fig = self.axis_fig_m if shift == "morning" else self.axis_fig_e
+        axis_canvas = self.axis_canvas_m if shift == "morning" else self.axis_canvas_e
+
+        axis_fig.clear()
+        ax2 = axis_fig.add_subplot(111)
+
+        # 同步时间范围
+        ax2.set_xlim(ax.get_xlim())
+
+        # 只保留 x 轴
+        ax2.yaxis.set_visible(False)
+
+        ax2.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+        ax2.tick_params(axis="x", labelsize=9)
+
+        # 去边框
+        for side in ["top", "right", "left"]:
+            ax2.spines[side].set_visible(False)
+
+        axis_fig.subplots_adjust(left=0.22, right=0.88, top=1.0, bottom=0.4)
+
+        axis_canvas.draw_idle()
 
     def on_hover(self, event, names):
         if event.inaxes is None or event.ydata is None:
             QToolTip.hideText()
             return
 
-        idx = int(round(event.ydata))
-        if 0 <= idx < len(names):
-            name = names[idx]
-            summary = self.summary.get(name)
-            if summary:
+        for i, name in enumerate(names):
+            # ✅ 判断是否在这一行范围内
+            if i - 0.5 <= event.ydata <= i + 0.5:
+                summary = self.summary.get(name, {
+                    "in": "--",
+                    "out": "--",
+                    "ratio": 0
+                })
+
                 QToolTip.showText(
                     QCursor.pos(),
                     f"<b>{name}</b><br>In: {summary['in']}<br>Out: {summary['out']}<br>Eff: {summary['ratio']:.1f}%",
                 )
-        else:
-            QToolTip.hideText()
+                return
+
+        QToolTip.hideText()
 
     def refresh_fa_table(self, df_day):
         current_date = self.date_combo.currentText()
