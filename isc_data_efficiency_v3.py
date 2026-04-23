@@ -33,6 +33,11 @@ from matplotlib.figure import Figure
 import matplotlib.dates as mdates
 from matplotlib.patches import Patch
 
+import matplotlib.pyplot as plt
+
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+plt.rcParams['axes.unicode_minus'] = False
+
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # =========================
@@ -1287,7 +1292,67 @@ class MainWindow(QMainWindow):
         self.k_date.val.setText(self.current_warehouse)
         self.k_workers.val.setText(str(df_day["name"].nunique()))
 
-        total_man_hours = df_day["duration"].sum()
+        # ======================
+        # 总工时 = 下班 - 上班（按人汇总）
+        # ======================
+        total_man_hours = 0
+
+        for name, group in df_day.groupby("name"):
+            if "(" in name:
+                emp_no = name.split("(")[-1].replace(")", "").strip()
+            else:
+                emp_no = name.strip()
+
+            name = group["name"].dropna().iloc[0] if "name" in group and not group["name"].dropna().empty else emp_no
+
+            current_day = pd.to_datetime(self.date_combo.currentText()).date()
+
+            punch_in = None
+            punch_out = None
+
+            # ======================
+            # 1️⃣ iAMS
+            # ======================
+            row_iams = self.df2[
+                (self.df2["employee_no"].astype(str) == str(emp_no)) &
+                (self.df2["上班时间"].apply(adjust_work_date) == current_day)
+            ]
+
+            if not row_iams.empty:
+                punch_in = pd.to_datetime(row_iams["上班时间"].iloc[0], errors="coerce")
+                punch_out = pd.to_datetime(row_iams["下班时间"].iloc[0], errors="coerce")
+
+            # ======================
+            # 2️⃣ ISC
+            # ======================
+            if punch_in is None or pd.isna(punch_in) or pd.isna(punch_out):
+                row_isc = self.df[
+                    (self.df["employee_no"].astype(str) == str(emp_no)) &
+                    (self.df["work_date"] == current_day)
+                ]
+
+                if not row_isc.empty:
+                    if punch_in is None or pd.isna(punch_in):
+                        punch_in = pd.to_datetime(row_isc["上班时间"].min(), errors="coerce")
+
+                    if punch_out is None or pd.isna(punch_out):
+                        punch_out = pd.to_datetime(row_isc["下班时间"].max(), errors="coerce")
+
+            # ======================
+            # 3️⃣ fallback（没有打卡）
+            # ======================
+            if pd.isna(punch_in):
+                punch_in = group["start"].min()
+
+            if pd.isna(punch_out):
+                punch_out = group["end"].max()
+
+            # ======================
+            # 计算工时
+            # ======================
+            if pd.notna(punch_in) and pd.notna(punch_out) and punch_out > punch_in:
+                hours = (punch_out - punch_in).total_seconds() / 3600
+                total_man_hours += hours
         self.k_total_manhours.val.setText(f"{total_man_hours:.1f}h")
 
         valid_man_hours = df_day[df_day["type"].isin(["work", "overnight"])]["duration"].sum()
