@@ -244,109 +244,228 @@ def load_break_data(file4):
 
 def build_timeline(df, df2, group_mapping, df_breaks=None):
     records = []
-    processed_names = set()
+    processed = set()
 
-    for _, row2 in df2.iterrows():
-        emp_no = str(row2["employee_no"])
-        name = str(row2["real_name"])
-        display_name = f"{name} ({emp_no})"
-        group_name = str(row2["attendance_group"])
-        work_start = row2["上班时间"]
-        work_end = row2["下班时间"]
+    # ======================
+    # 工具函数：取 ISC 上下班
+    # ======================
+    def get_isc_time(emp_no, day):
+        emp_df = df[
+            (df["employee_no"].astype(str) == emp_no) &
+            (df["work_date"] == day)
+        ]
+
+        if emp_df.empty:
+            return None, None
+
+        start = pd.to_datetime(emp_df["上班时间"].min(), errors="coerce")
+        end = pd.to_datetime(emp_df["下班时间"].max(), errors="coerce")
+        return start, end
+
+    # ======================
+    # ① iAMS 优先
+    # ======================
+    for _, row in df2.iterrows():
+        emp_no = str(row["employee_no"])
+        name = str(row["real_name"])
+        display = f"{name} ({emp_no})"
+        group_name = str(row["attendance_group"])
+
+        work_start = row["上班时间"]
+        work_end = row["下班时间"]
+
+        day = pd.to_datetime(work_start).date() if not pd.isna(work_start) else None
+
+        # ======================
+        # fallback：ISC
+        # ======================
+        isc_start, isc_end = get_isc_time(emp_no, day)
+
+        if pd.isna(work_start) and isc_start is not None:
+            work_start = isc_start
+
+        if pd.isna(work_end) and isc_end is not None:
+            work_end = isc_end
 
         if pd.isna(work_start) or pd.isna(work_end):
             continue
 
-        day = adjust_work_date(work_start)
-        processed_names.add((display_name, day))
-        shift_name = str(row2.get("班次名称", ""))
+        day = work_start.date()
+        processed.add((emp_no, day))
 
-        if "早" in shift_name:
-            shift_tag = "morning"
-        elif "晚" in shift_name:
-            shift_tag = "evening"
-        else:
-            shift_tag = "morning" if work_start.hour < 12 else "evening"
+        shift = "morning" if work_start.hour < 12 else "evening"
 
-        person_tasks = df[
-            (df["employee_no"] == emp_no)
-            & (df["work_date"] == day) 
-            & (df["start"] < work_end) 
-            & (df["end"] > work_start)
+        tasks = df[
+            (df["employee_no"].astype(str) == emp_no) &
+            (df["work_date"] == day)
         ].copy()
-        person_tasks["type"] = "work"
+
+        tasks["start"] = pd.to_datetime(tasks["start"], errors="coerce")
+        tasks["end"] = pd.to_datetime(tasks["end"], errors="coerce")
+        tasks["type"] = "work"
+
+        # ✅ 只保留“上班前开始”的任务
+        tasks = tasks[
+            (tasks["start"] < work_end)
+        ].copy()
+
+        # ✅ start 还是限制
+        tasks["start"] = tasks["start"].clip(lower=work_start)
 
         if df_breaks is not None and not df_breaks.empty:
             p_breaks = df_breaks[
-                (df_breaks["emp_no"] == emp_no)
-                & (df_breaks["start"] < work_end)
-                & (df_breaks["end"] > work_start)
+                df_breaks["emp_no"].astype(str) == emp_no
             ].copy()
-            combined = pd.concat(
-                [person_tasks, p_breaks.rename(columns={"emp_no": "employee_no"})],
-                ignore_index=True,
-            ).sort_values("start")
-        else:
-            combined = person_tasks.sort_values("start")
 
-        current_cursor = work_start
-        for _, task in combined.iterrows():
-            t_s = max(task["start"], work_start)
-            t_e = min(task["end"], work_end)
-            if t_s >= t_e:
+            p_breaks["start"] = pd.to_datetime(p_breaks["start"], errors="coerce")
+            p_breaks["end"] = pd.to_datetime(p_breaks["end"], errors="coerce")
+            p_breaks["type"] = "break"
+
+            p_breaks = p_breaks[
+                (p_breaks["end"] > work_start) &
+                (p_breaks["start"] < work_end)
+            ].copy()
+
+            p_breaks["start"] = p_breaks["start"].clip(lower=work_start, upper=work_end)
+            p_breaks["end"] = p_breaks["end"].clip(lower=work_start, upper=work_end)
+
+            tasks = pd.concat([tasks, p_breaks[["start", "end", "type"]]], ignore_index=True)
+
+        tasks = tasks.sort_values("start")
+        cursor = work_start
+
+        for _, t in tasks.iterrows():
+            s = max(t["start"], work_start)
+            e = min(t["end"], work_end)
+
+            if s >= e:
                 continue
 
-            if t_s > current_cursor:
-                records.append(
-                    [display_name, day, current_cursor, t_s, "idle", shift_tag, False, group_name]
-                )
+            if s > cursor:
+                records.append([display, day, cursor, s, "idle", shift, False, group_name])
 
-            task_type = task["type"]
-            if task_type == "work" and task["start"].date() != task["end"].date():
-                task_type = "overnight"
+            # ✅ overtime 判断（核心）
+            if pd.notna(t["end"]) and t["end"].date() > work_end.date():
+                t_type = "overnight"
+            else:
+                t_type = t["type"]
 
-            records.append([display_name, day, t_s, t_e, task_type, shift_tag, False, group_name])
-            current_cursor = max(current_cursor, t_e)
+            records.append([display, day, s, e, t_type, shift, False, group_name])
 
-        if current_cursor < work_end:
-            records.append(
-                [display_name, day, current_cursor, work_end, "idle", shift_tag, False, group_name]
-            )
+            cursor = e
 
-    d1_dates = set(df["work_date"].dropna().unique())
-    for current_day in sorted(list(d1_dates)):
-        day_tasks_all = df[df["work_date"] == current_day]
-        for display_name, group in day_tasks_all.groupby("display_name"):
-            if (display_name, current_day) in processed_names:
+        # ✅ 放在 for 循环外
+        last_end = cursor
+
+        if pd.notna(last_end) and last_end < work_end:
+            records.append([
+                display,
+                day,
+                last_end,
+                work_end,
+                "idle",
+                shift,
+                False,
+                group_name
+            ])
+                # ======================
+    # ② ISC-only
+    # ======================
+    for day in sorted(df["work_date"].dropna().unique()):
+        day_df = df[df["work_date"] == day]
+
+        for emp_no, group in day_df.groupby("employee_no"):
+            if (emp_no, day) in processed:
                 continue
 
-            emp_id = display_name.split("(")[-1].strip(")")
-            sorted_group = group.sort_values("start")
-            first_task_start = sorted_group["start"].min()
-            auto_shift = "morning" if 6 <= first_task_start.hour < 12 else "evening"
+            emp_no = str(emp_no)
+            display = group["display_name"].iloc[0]
+            group_name = group_mapping.get(emp_no, "Unknown")
 
-            for _, task in sorted_group.iterrows():
-                records.append(
-                    [
-                        display_name,
-                        current_day,
-                        task["start"],
-                        task["end"],
-                        "work",
-                        auto_shift,
-                        True,
-                        group_mapping.get(emp_id, "Unknown"),
-                    ]
-                )
+            # ======================
+            # 优先用 ISC 上下班
+            # ======================
+            work_start = pd.to_datetime(group["上班时间"].min(), errors="coerce")
+            work_end = pd.to_datetime(group["下班时间"].max(), errors="coerce")
+
+            task_start = pd.to_datetime(group["start"].min(), errors="coerce")
+            task_end = pd.to_datetime(group["end"].max(), errors="coerce")
+
+            # 缺哪个补哪个，不要整段覆盖
+            if pd.isna(work_start):
+                work_start = task_start
+
+            if pd.isna(work_end):
+                work_end = task_end
+            if pd.isna(work_start) or pd.isna(work_end):
+                continue
+
+            shift = "morning" if work_start.hour < 12 else "evening"
+
+            group = group.copy()
+            group["start"] = pd.to_datetime(group["start"], errors="coerce")
+            group["end"] = pd.to_datetime(group["end"], errors="coerce")
+            group["type"] = "work"
+
+            group = group[
+                (group["start"] < work_end)
+            ].copy()
+
+            group["start"] = group["start"].clip(lower=work_start)
+
+            if df_breaks is not None and not df_breaks.empty:
+                p_breaks = df_breaks[
+                    df_breaks["emp_no"].astype(str) == emp_no
+                ].copy()
+
+                p_breaks["start"] = pd.to_datetime(p_breaks["start"], errors="coerce")
+                p_breaks["end"] = pd.to_datetime(p_breaks["end"], errors="coerce")
+                p_breaks["type"] = "break"
+
+                p_breaks = p_breaks[
+                    (p_breaks["end"] > work_start) &
+                    (p_breaks["start"] < work_end)
+                ].copy()
+
+                p_breaks["start"] = p_breaks["start"].clip(lower=work_start, upper=work_end)
+                p_breaks["end"] = p_breaks["end"].clip(lower=work_start, upper=work_end)
+
+                group = pd.concat([group[["start", "end", "type"]], p_breaks[["start", "end", "type"]]], ignore_index=True)
+            else:
+                group = group[["start", "end", "type"]]
+
+            group = group.sort_values("start")
+            cursor = work_start
+
+            for _, t in group.iterrows():
+                s = max(t["start"], work_start)
+                e = min(t["end"], work_end)
+
+                if s > cursor:
+                    records.append([display, day, cursor, s, "idle", shift, True, group_name])
+
+                # ✅ overtime 判断
+                if pd.notna(t["end"]) and t["end"].date() > work_end.date():
+                    t_type = "overnight"
+                else:
+                    t_type = t["type"]
+
+                records.append([display, day, s, e, t_type, shift, True, group_name])
+
+                cursor = e
+
+            if cursor < work_end:
+                records.append([display, day, cursor, work_end, "idle", shift, True, group_name])
 
     timeline = pd.DataFrame(
         records,
-        columns=["name", "date", "start", "end", "type", "shift", "is_absent", "group"],
+        columns=["name", "date", "start", "end", "type", "shift", "is_absent", "group"]
     )
-    if not timeline.empty:
-        timeline["duration"] = (timeline["end"] - timeline["start"]).dt.total_seconds() / 3600
-    else:
-        timeline["duration"] = pd.Series(dtype=float)
+
+    timeline["duration"] = (
+        timeline["end"] - timeline["start"]
+    ).dt.total_seconds() / 3600
+
     return timeline
 
 
@@ -1082,8 +1201,12 @@ class MainWindow(QMainWindow):
             break_df = load_break_data(self.file4) if hasattr(self, "file4") else None
 
             self.volume_data = volume_data
-            self.timeline = build_timeline(df, df2, group_map, break_df)
-
+            self.timeline = build_timeline(
+                df,
+                df2,
+                group_map,
+                break_df,
+            )
             self.history_ratios = {}
             self.history_wait = {}
 
@@ -1217,6 +1340,8 @@ class MainWindow(QMainWindow):
         if not date or self.timeline.empty:
             return
 
+        current_day = pd.to_datetime(date).date()
+
         df_shift = self.timeline[
             (self.timeline["date"].astype(str) == date) & (self.timeline["shift"] == shift)
         ].copy()
@@ -1230,14 +1355,49 @@ class MainWindow(QMainWindow):
 
             work_duration = group[group["type"].isin(["work", "overnight"])]["duration"].sum()
             total_duration = group["duration"].sum()
-
-            # ✅ 防止空
             ratio = (work_duration / total_duration * 100) if total_duration > 0 else 0
+
+            if "(" in name:
+                emp_no = name.split("(")[-1].replace(")", "").strip()
+            else:
+                emp_no = name
+
+            in_time = None
+            out_time = None
+
+            # 只取当天的 iAMS
+            row_iams = self.df2[
+                (self.df2["employee_no"].astype(str) == emp_no) &
+                (self.df2["上班时间"].apply(adjust_work_date) == current_day)
+            ]
+
+            if not row_iams.empty:
+                in_time = row_iams["上班时间"].iloc[0]
+                out_time = row_iams["下班时间"].iloc[0]
+
+            # 只取当天的 ISC
+            if pd.isna(in_time) or pd.isna(out_time):
+                row_isc = self.df[
+                    (self.df["employee_no"].astype(str) == emp_no) &
+                    (self.df["work_date"] == current_day)
+                ]
+
+                if not row_isc.empty:
+                    isc_in = pd.to_datetime(row_isc["上班时间"].min(), errors="coerce")
+                    isc_out = pd.to_datetime(row_isc["下班时间"].max(), errors="coerce")
+
+                    if pd.isna(in_time):
+                        in_time = isc_in
+                    if pd.isna(out_time):
+                        out_time = isc_out
+
+            display_in = in_time.strftime("%H:%M") if pd.notna(in_time) else "缺失"
+            display_out = out_time.strftime("%H:%M") if pd.notna(out_time) else "缺失"
 
             self.summary[name] = {
                 "ratio": ratio,
-                "in": group["start"].min().strftime("%H:%M") if not group.empty else "--",
-                "out": group["end"].max().strftime("%H:%M") if not group.empty else "--",
+                "in": display_in,
+                "out": display_out,
             }
 
         ax, canvas, placeholder = (
@@ -1275,10 +1435,18 @@ class MainWindow(QMainWindow):
         fig.set_size_inches(14, fig_height)  # 宽固定，高动态
         y_map = {name: i for i, name in enumerate(names)}
 
+        MIN_WIDTH = 1 / 1440  # 最小1分钟宽度
+
         for _, row in df_shift.iterrows():
+            width = mdates.date2num(row["end"]) - mdates.date2num(row["start"])
+
+            # ✅ 核心：强制最小宽度
+            if width < MIN_WIDTH:
+                width = MIN_WIDTH
+
             ax.barh(
                 y_map[row["name"]],
-                mdates.date2num(row["end"]) - mdates.date2num(row["start"]),
+                width,
                 left=mdates.date2num(row["start"]),
                 color=THEME.get(row["type"], "#D1D5DB"),
                 height=0.62,
@@ -1338,7 +1506,7 @@ class MainWindow(QMainWindow):
         ax.grid(axis="x", color="#E2E8F0", linestyle="--", alpha=0.65)
         # ✅ 限制白班只显示到18:00
         if shift == "morning":
-            start_time = pd.to_datetime(self.date_combo.currentText() + " 07:00")
+            start_time = pd.to_datetime(self.date_combo.currentText() + " 06:00")
             end_time = pd.to_datetime(self.date_combo.currentText() + " 18:00")
             ax.set_xlim(start_time, end_time)
         legend_items = [
@@ -1433,12 +1601,38 @@ class MainWindow(QMainWindow):
 
         records = []
         for name, group in df_day.groupby("name"):
-            if group["is_absent"].any():
-                continue
 
             emp_no = name.split("(")[-1].replace(")", "").strip() if "(" in name else name
             work = group[group["type"].isin(["work", "overnight"])].sort_values("start")
-            punch_in = group["start"].min()
+            # ======================
+            # 获取 punch_in（优先 iAMS，其次 ISC）
+            # ======================
+            emp_no = name.split("(")[-1].replace(")", "").strip() if "(" in name else name
+            current_day = pd.to_datetime(self.date_combo.currentText()).date()
+
+            punch_in = None
+
+            # 1️⃣ iAMS
+            row_iams = self.df2[
+                (self.df2["employee_no"].astype(str) == emp_no) &
+                (self.df2["上班时间"].apply(adjust_work_date) == current_day)
+            ]
+
+            if not row_iams.empty:
+                punch_in = row_iams["上班时间"].iloc[0]
+
+            # 2️⃣ ISC
+            if pd.isna(punch_in):
+                row_isc = self.df[
+                    (self.df["employee_no"].astype(str) == emp_no) &
+                    (self.df["work_date"] == current_day)
+                ]
+                if not row_isc.empty:
+                    punch_in = pd.to_datetime(row_isc["上班时间"].min(), errors="coerce")
+
+            # 3️⃣ fallback
+            if pd.isna(punch_in):
+                punch_in = group["start"].min()
 
             if not work.empty:
                 first_task = work.iloc[0]["start"]
