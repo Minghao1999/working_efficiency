@@ -1350,7 +1350,7 @@ class MainWindow(QMainWindow):
         ax.legend(
             handles=legend_items,
             loc="upper right",
-            bbox_to_anchor=(1.16, 1.0),
+            bbox_to_anchor=(1.17, 1.0),
             frameon=False,
             fontsize=8,
         )
