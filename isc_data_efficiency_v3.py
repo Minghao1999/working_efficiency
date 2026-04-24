@@ -224,37 +224,43 @@ def load_volume_data(file3):
 
 
 
-def load_break_data(file4):
+def load_break_data(file4, selected_group=None):
     try:
         df4 = pd.read_excel(file4)
-        df_clean = pd.DataFrame(
-            {
-                "emp_no": df4.iloc[:, 3].astype(str).str.strip(),
-                "time": pd.to_datetime(df4.iloc[:, 12], errors="coerce"),
-                "action": df4.iloc[:, 18].astype(str),
-            }
-        ).sort_values(["emp_no", "time"])
 
+        df = pd.DataFrame({
+            "emp_no": df4.iloc[:, 3].astype(str).str.strip(),
+            "time": pd.to_datetime(df4.iloc[:, 12], errors="coerce"),
+            "action": df4.iloc[:, 18].astype(str),
+            "group": df4.iloc[:, 2].astype(str).str.strip(),
+        }).dropna(subset=["time"]).sort_values(["emp_no", "time"])
         breaks = []
-        for emp, group in df_clean.groupby("emp_no"):
+
+        for emp, group in df.groupby("emp_no"):
             out_time = None
+
             for _, row in group.iterrows():
-                if "出仓" in row["action"]:
+                action = str(row["action"])
+
+                if "出仓" in action:
                     out_time = row["time"]
-                elif "进仓" in row["action"] and out_time is not None:
-                    duration = (row["time"] - out_time).total_seconds() / 60
-                    if duration >= 20 and 11 <= out_time.hour <= 15:
-                        breaks.append(
-                            {
-                                "emp_no": emp,
-                                "start": out_time,
-                                "end": row["time"],
-                                "type": "break",
-                            }
-                        )
+
+                elif "进仓" in action and out_time is not None:
+                    if row["time"] > out_time:
+                        breaks.append({
+                            "emp_no": emp,
+                            "start": out_time,
+                            "end": row["time"],
+                            "work_date": adjust_work_date(out_time),
+                            "type": "break",
+                            "group": row["group"],
+                        })
                     out_time = None
+
         return pd.DataFrame(breaks)
-    except Exception:
+
+    except Exception as e:
+        print("break读取失败:", e)
         return pd.DataFrame()
 
 def load_indirect_data(file1):
@@ -297,6 +303,7 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
             (df["employee_no"].astype(str) == emp_no) &
             (df["work_date"] == day)
         ]
+        emp_df["employee_no"] = emp_no
 
         if emp_df.empty:
             return None, None
@@ -357,7 +364,9 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
 
         if df_breaks is not None and not df_breaks.empty:
             p_breaks = df_breaks[
-                df_breaks["emp_no"].astype(str) == emp_no
+                (df_breaks["emp_no"].astype(str).str.strip() == emp_no) &
+                (df_breaks["work_date"] == day) &
+                (df_breaks["group"].astype(str).str.strip() == group_name)
             ].copy()
 
             p_breaks["start"] = pd.to_datetime(p_breaks["start"], errors="coerce")
@@ -372,29 +381,53 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
             p_breaks["start"] = p_breaks["start"].clip(lower=work_start, upper=work_end)
             p_breaks["end"] = p_breaks["end"].clip(lower=work_start, upper=work_end)
 
-            tasks = pd.concat([tasks, p_breaks[["start", "end", "type"]]], ignore_index=True)
+            p_breaks["employee_no"] = emp_no
+
+            tasks = pd.concat([
+                tasks,
+                p_breaks[["start", "end", "type", "employee_no"]]
+            ], ignore_index=True)
 
         tasks = tasks.sort_values("start")
         cursor = work_start
 
         for _, t in tasks.iterrows():
+
+            if "employee_no" in t and str(t["employee_no"]) != emp_no:
+                continue
+
             s = max(t["start"], work_start)
             e = min(t["end"], work_end)
 
             if s >= e:
                 continue
 
+            # ✅ 1️⃣ 先补 idle
             if s > cursor:
-                records.append([display, day, cursor, s, "idle", shift, False, group_name])
+                records.append([
+                    display,
+                    day,
+                    cursor,
+                    s,
+                    "idle",
+                    shift,
+                    False,
+                    group_name
+                ])
 
-            # ✅ overtime 判断（核心）
-            if pd.notna(t["end"]) and t["end"].date() > work_end.date():
-                t_type = "overnight"
-            else:
-                t_type = t["type"]
+            # ✅ 2️⃣ 再加 work / break
+            records.append([
+                display,
+                day,
+                s,
+                e,
+                t["type"],   # 👈 关键（work 或 break）
+                shift,
+                False,
+                group_name
+            ])
 
-            records.append([display, day, s, e, t_type, shift, False, group_name])
-
+            # ✅ 3️⃣ 移动 cursor
             cursor = e
 
         # ✅ 放在 for 循环外
@@ -446,6 +479,7 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
             shift = "morning" if work_start.hour < 12 else "evening"
 
             group = group.copy()
+            group["employee_no"] = emp_no
             group["start"] = pd.to_datetime(group["start"], errors="coerce")
             group["end"] = pd.to_datetime(group["end"], errors="coerce")
             group["type"] = "work"
@@ -458,7 +492,9 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
 
             if df_breaks is not None and not df_breaks.empty:
                 p_breaks = df_breaks[
-                    df_breaks["emp_no"].astype(str) == emp_no
+                    (df_breaks["emp_no"].astype(str).str.strip() == emp_no) &
+                    (df_breaks["work_date"] == day) &
+                    (df_breaks["group"].astype(str).str.strip() == group_name)
                 ].copy()
 
                 p_breaks["start"] = pd.to_datetime(p_breaks["start"], errors="coerce")
@@ -473,7 +509,12 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
                 p_breaks["start"] = p_breaks["start"].clip(lower=work_start, upper=work_end)
                 p_breaks["end"] = p_breaks["end"].clip(lower=work_start, upper=work_end)
 
-                group = pd.concat([group[["start", "end", "type"]], p_breaks[["start", "end", "type"]]], ignore_index=True)
+                p_breaks["employee_no"] = emp_no
+
+                group = pd.concat([
+                    group[["start", "end", "type"]],
+                    p_breaks[["start", "end", "type", "employee_no"]]
+                ], ignore_index=True)
             else:
                 group = group[["start", "end", "type"]]
 
@@ -1426,8 +1467,11 @@ class MainWindow(QMainWindow):
             # 👉 当前仓库（默认取最多的）
             self.current_warehouse = df["warehouse_short"].mode()[0]
             volume_data = load_volume_data(self.file3) if hasattr(self, "file3") else {}
-            break_df = load_break_data(self.file4) if hasattr(self, "file4") else None
+            selected_group = self.group_m.currentText()
 
+            break_df = load_break_data(self.file4) if hasattr(self, "file4") else None            
+            print("BREAK CHECK")
+            print(break_df.groupby(["work_date", "emp_no"]).size())
             self.volume_data = volume_data
             self.timeline = build_timeline(
                 df,
@@ -1579,7 +1623,11 @@ class MainWindow(QMainWindow):
         self.k_total_manhours.val.setText(f"{total_man_hours:.1f}h")
 
         valid_man_hours = df_day[df_day["type"].isin(["work", "overnight"])]["duration"].sum()
-        eff_ratio = (valid_man_hours / total_man_hours * 100) if total_man_hours > 0 else 0
+        break_hours = df_day[df_day["type"] == "break"]["duration"].sum()
+
+        effective_hours = total_man_hours - break_hours
+
+        eff_ratio = (valid_man_hours / effective_hours * 100) if effective_hours > 0 else 0        
         self.update_efficiency_donut(eff_ratio)
 
         volume = int(self.volume_data.get(pd.to_datetime(date).date(), 0)) if self.volume_data else 0
@@ -1643,9 +1691,14 @@ class MainWindow(QMainWindow):
             group = df_shift[df_shift["name"] == name]
 
             work_duration = group[group["type"].isin(["work", "overnight"])]["duration"].sum()
-            total_duration = group["duration"].sum()
-            ratio = (work_duration / total_duration * 100) if total_duration > 0 else 0
 
+            break_duration = group[group["type"] == "break"]["duration"].sum()
+
+            total_duration = group["duration"].sum()
+
+            effective_duration = total_duration - break_duration
+
+            ratio = (work_duration / effective_duration * 100) if effective_duration > 0 else 0
             if "(" in name:
                 emp_no = name.split("(")[-1].replace(")", "").strip()
             else:
