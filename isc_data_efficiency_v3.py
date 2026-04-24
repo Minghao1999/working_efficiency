@@ -34,6 +34,7 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Patch
 
 import matplotlib.pyplot as plt
+from PyQt6.QtCore import QEvent
 
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
@@ -62,6 +63,17 @@ THEME = {
     "break": "#D9E6AF",
     "kpi_bg": "#EEF4FF",
 }
+
+class ScrollableCanvas(FigureCanvas):
+    def wheelEvent(self, event):
+        parent = self.parent()
+        while parent:
+            if isinstance(parent, QScrollArea):
+                QApplication.sendEvent(parent.viewport(), event)
+                return
+            parent = parent.parent()
+
+        super().wheelEvent(event)
 
 
 def resource_path(relative_path: str) -> str:
@@ -715,10 +727,10 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(14)
 
-        self.card1 = FilePickerCard("ISC Task Data(任务数据)", "Upload ISC data", "Upload ISC")
-        self.card2 = FilePickerCard("iAMS Attendance(班次明细)", "Upload iAMS data", "Upload iAMS")
-        self.card3 = FilePickerCard("Volume Data(出库件量)", "Optional", "Upload Volume")
-        self.card4 = FilePickerCard("Punch Data(打卡流水)", "Optional", "Upload Punch")
+        self.card1 = FilePickerCard("ISC Task Data(任务数据)", "来自ISC员工操作时长", "Upload ISC")
+        self.card2 = FilePickerCard("iAMS Attendance(班次明细)", "来自iAMS班次明细", "Upload iAMS")
+        self.card3 = FilePickerCard("Volume Data(出库件量)", "来自iWMS销售单综合查询", "Upload Volume")
+        self.card4 = FilePickerCard("Punch Data(打卡流水)", "来自iAMS打卡流水", "Upload Punch")
 
         grid.addWidget(self.card1, 0, 0)
         grid.addWidget(self.card2, 0, 1)
@@ -913,7 +925,7 @@ class MainWindow(QMainWindow):
 
         self.indirect_fig = Figure()
         self.indirect_fig.patch.set_alpha(0)
-        self.indirect_canvas = FigureCanvas(self.indirect_fig)
+        self.indirect_canvas = ScrollableCanvas(self.indirect_fig)
         self.indirect_canvas.setStyleSheet("border: none; background: transparent;")
         self.indirect_canvas.hide()
 
@@ -1327,7 +1339,7 @@ class MainWindow(QMainWindow):
 
         fig = Figure()
         fig.patch.set_alpha(0)
-        canvas = FigureCanvas(fig)
+        canvas = ScrollableCanvas(fig)
         canvas.setStyleSheet("border: none; background: transparent;")
         canvas.hide()
 
