@@ -245,7 +245,33 @@ def load_break_data(file4):
     except Exception:
         return pd.DataFrame()
 
+def load_indirect_data(file1):
+    try:
+        df = pd.read_excel(file1, sheet_name="间接工时明细-间接工时")
+        df.columns = df.columns.str.strip()
 
+        df["employee_no"] = df["employee_no"].astype(str).str.strip()
+        df["开始时间"] = pd.to_datetime(df["开始时间"], errors="coerce")
+        df["结束时间"] = pd.to_datetime(df["结束时间"], errors="coerce")
+        df["操作分类"] = df["操作分类"].astype(str).str.strip().replace("nan", "未分类")
+        df["间接工时(分)"] = pd.to_numeric(df["间接工时(分)"], errors="coerce").fillna(0)
+
+        df = df.dropna(subset=["开始时间", "结束时间"])
+        df = df[df["结束时间"] > df["开始时间"]]
+
+        df["work_date"] = df["开始时间"].apply(adjust_work_date)
+
+        df["display_name"] = df["employee_no"]
+
+        df["duration"] = (
+            df["结束时间"] - df["开始时间"]
+        ).dt.total_seconds() / 3600
+
+        return df
+
+    except Exception as e:
+        print("间接工时读取失败:", e)
+        return pd.DataFrame()
 
 def build_timeline(df, df2, group_mapping, df_breaks=None):
     records = []
@@ -756,11 +782,13 @@ class MainWindow(QMainWindow):
         self.tab_e = QWidget()
         self.tab_fa = QWidget()
         self.tab_no_op = QWidget() 
+        self.tab_indirect = QWidget()
 
         self.tabs.addTab(self.tab_m, "Morning Shift")
         self.tabs.addTab(self.tab_e, "Evening Shift")
         self.tabs.addTab(self.tab_fa, "First Action Analysis")
         self.tabs.addTab(self.tab_no_op, "No Operation Analysis") 
+        self.tabs.addTab(self.tab_indirect, "Indirect Time")
 
         root.addWidget(self.tabs, 1)
 
@@ -841,6 +869,72 @@ class MainWindow(QMainWindow):
         no_op_inner.addWidget(self.no_op_table)
 
         no_op_layout.addWidget(no_op_card)
+
+        # =============================
+        # Indirect Time UI
+        # =============================
+        indirect_layout = QVBoxLayout(self.tab_indirect)
+        indirect_layout.setContentsMargins(12, 12, 12, 12)
+
+        indirect_card = QFrame()
+        indirect_card.setObjectName("sectionCard")
+        apply_shadow(indirect_card, blur=20, y_offset=6, alpha=18)
+
+        indirect_inner = QVBoxLayout(indirect_card)
+        indirect_inner.setContentsMargins(16, 16, 16, 16)
+        indirect_inner.setSpacing(12)
+
+        top = QHBoxLayout()
+
+        title_box = QVBoxLayout()
+        title = QLabel("Indirect Time Timeline")
+        title.setObjectName("sectionTitle")
+
+        subtitle = QLabel("Indirect work time by employee, filtered by operation category.")
+        subtitle.setObjectName("sectionSubtitle")
+
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+
+        self.indirect_group_combo = QComboBox()
+        self.indirect_group_combo.addItem("All Categories")
+        self.indirect_group_combo.setMinimumWidth(220)
+        self.indirect_group_combo.currentTextChanged.connect(self.refresh_indirect_gantt)
+
+        top.addLayout(title_box, 1)
+        top.addWidget(QLabel("Filter Category"))
+        top.addWidget(self.indirect_group_combo)
+
+        indirect_inner.addLayout(top)
+
+        self.indirect_placeholder = QLabel("Upload ISC data and generate to see indirect time chart")
+        self.indirect_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.indirect_placeholder.setStyleSheet(f"color: {THEME['muted']}; font-size: 13px; padding: 40px;")
+
+        self.indirect_fig = Figure()
+        self.indirect_fig.patch.set_alpha(0)
+        self.indirect_canvas = FigureCanvas(self.indirect_fig)
+        self.indirect_canvas.setStyleSheet("border: none; background: transparent;")
+        self.indirect_canvas.hide()
+
+        self.indirect_scroll = QScrollArea()
+        self.indirect_scroll.setWidgetResizable(True)
+        self.indirect_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.indirect_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        indirect_scroll_container = QWidget()
+        indirect_scroll_layout = QVBoxLayout(indirect_scroll_container)
+        indirect_scroll_layout.setContentsMargins(0, 0, 0, 0)
+        indirect_scroll_layout.addWidget(self.indirect_canvas)
+
+        self.indirect_scroll.setWidget(indirect_scroll_container)
+        self.indirect_scroll.setMinimumHeight(500)
+
+        indirect_inner.addWidget(self.indirect_scroll)
+        indirect_inner.addWidget(self.indirect_placeholder)
+
+        indirect_layout.addWidget(indirect_card)
+
         # =============================
         # signals（保持原逻辑）
         # =============================
@@ -874,6 +968,122 @@ class MainWindow(QMainWindow):
                 self.no_op_table.setItem(r, 1, QTableWidgetItem(str(row["real_name"])))
                 self.no_op_table.setItem(r, 2, QTableWidgetItem(str(row["上班时间"])))
                 self.no_op_table.setItem(r, 3, QTableWidgetItem(str(row["下班时间"])))
+
+    def refresh_indirect_gantt(self):
+        if not hasattr(self, "indirect_df") or self.indirect_df.empty:
+            self.indirect_canvas.hide()
+            self.indirect_placeholder.show()
+            return
+
+        date = self.date_combo.currentText()
+        if not date:
+            return
+
+        selected_date = pd.to_datetime(date).date()
+
+        df_day = self.indirect_df[
+            self.indirect_df["work_date"] == selected_date
+        ].copy()
+
+        categories = sorted(df_day["操作分类"].dropna().astype(str).unique())
+
+        self.indirect_group_combo.blockSignals(True)
+        current = self.indirect_group_combo.currentText()
+        self.indirect_group_combo.clear()
+        self.indirect_group_combo.addItem("All Categories")
+        self.indirect_group_combo.addItems(categories)
+
+        if current in categories:
+            self.indirect_group_combo.setCurrentText(current)
+        else:
+            self.indirect_group_combo.setCurrentText("All Categories")
+
+        self.indirect_group_combo.blockSignals(False)
+
+        if self.indirect_group_combo.currentText() != "All Categories":
+            df_day = df_day[
+                df_day["操作分类"] == self.indirect_group_combo.currentText()
+            ]
+
+        if df_day.empty:
+            self.indirect_canvas.hide()
+            self.indirect_placeholder.show()
+            return
+
+        self.indirect_placeholder.hide()
+        self.indirect_canvas.show()
+
+        self.draw_indirect_chart(df_day)
+
+
+    def draw_indirect_chart(self, df_day):
+        fig = self.indirect_fig
+        fig.clear()
+        fig.patch.set_alpha(0)
+
+        ax = fig.add_subplot(111)
+        ax.set_facecolor("none")
+
+        names = sorted(df_day["employee_no"].astype(str).unique())
+        y_map = {name: i for i, name in enumerate(names)}
+
+        MIN_WIDTH = 1 / 1440
+
+        for _, row in df_day.iterrows():
+            emp = str(row["employee_no"])
+            start = row["开始时间"]
+            end = row["结束时间"]
+
+            width = mdates.date2num(end) - mdates.date2num(start)
+
+            if width < MIN_WIDTH:
+                width = MIN_WIDTH
+
+            ax.barh(
+                y_map[emp],
+                width,
+                left=mdates.date2num(start),
+                height=0.62,
+                edgecolor="none",
+            )
+
+            ax.text(
+                mdates.date2num(end),
+                y_map[emp],
+                f" {row['操作分类']}",
+                va="center",
+                fontsize=8,
+                color=THEME["muted"],
+            )
+
+        ax.set_yticks(range(len(names)))
+        ax.set_yticklabels(names, fontsize=8, color=THEME["text"])
+
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+        ax.grid(axis="x", color="#E2E8F0", linestyle="--", alpha=0.65)
+
+        min_time = df_day["开始时间"].min()
+        max_time = df_day["结束时间"].max()
+
+        # 给一点边距（10分钟）
+        padding = pd.Timedelta(minutes=10)
+
+        ax.set_xlim(min_time - padding, max_time + padding)
+
+        ax.tick_params(axis="x", colors=THEME["muted"], labelsize=8)
+        ax.tick_params(axis="y", length=0)
+
+        for side in ["top", "right", "bottom", "left"]:
+            ax.spines[side].set_visible(False)
+
+        fig_height = max(4, len(names) * 0.4)
+        fig.set_size_inches(14, fig_height)
+        fig.subplots_adjust(left=0.18, right=0.94, top=0.96, bottom=0.08)
+
+        self.indirect_canvas.setMinimumHeight(max(400, len(names) * 30))
+        self.indirect_canvas.draw_idle()
 
     def apply_styles(self):
         self.setStyleSheet(
@@ -1195,6 +1405,7 @@ class MainWindow(QMainWindow):
             df, df2, group_map = load_data(self.file1, self.file2)
             self.df = df
             self.df2 = df2
+            self.indirect_df = load_indirect_data(self.file1)
             # ======================
             # ✅ 提取仓库
             # ======================
@@ -1375,6 +1586,7 @@ class MainWindow(QMainWindow):
 
         self.refresh_fa_table(df_day)
         self.refresh_no_op_table()
+        self.refresh_indirect_gantt()
 
     def update_efficiency_donut(self, ratio: float):
         self.eff_fig.clear()
