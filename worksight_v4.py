@@ -37,6 +37,31 @@ TYPE_COLOR = {
 # =========================
 # Tools
 # =========================
+def classify_file(file):
+    try:
+        df = pd.read_excel(file, nrows=5)
+        cols = [str(c).strip() for c in df.columns]
+
+        # ===== df1：任务 =====
+        if "任务单开始时间" in cols and "任务单结束时间" in cols:
+            return "task"
+
+        # ===== df2：班次 =====
+        if "实际上班时间" in cols and "实际下班时间" in cols:
+            return "attendance"
+
+        # ===== df3：件量 =====
+        if "打包完成时间" in cols and "件数" in cols:
+            return "volume"
+
+        # ===== df4：打卡 =====
+        if "打卡时间" in cols and "进出仓标识" in "".join(cols):
+            return "punch"
+
+        return "unknown"
+
+    except:
+        return "unknown"
 def adjust_work_date(dt):
     if pd.isna(dt):
         return None
@@ -1110,39 +1135,93 @@ st.title("WorkSight Pro")
 st.caption("Advanced productivity analytics dashboard for ISC, iAMS, volume, and punch data")
 
 with st.expander("Data Sources", expanded=True):
-    col1, col2 = st.columns(2)
-
-    with col1:
-        file1 = st.file_uploader("ISC Task Data（任务数据）", type=["xlsx", "xls"])
-        file3 = st.file_uploader("Volume Data（出库件量）", type=["xlsx", "xls"])
-
-    with col2:
-        file2 = st.file_uploader("iAMS Attendance（班次明细）", type=["xlsx", "xls"])
-        file4 = st.file_uploader("Punch Data（打卡流水）", type=["xlsx", "xls"])
-
+    files = st.file_uploader(
+        "Upload all files (ISC / iAMS / Volume / Punch)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=True
+    )
 generate_btn = st.button("Generate Dashboard", type="primary")
 
 if generate_btn:
-    if file1 is None or file2 is None:
-        st.error("请先上传 ISC Task Data 和 iAMS Attendance。")
+    if not files:
+        st.warning("请先上传文件")
+        st.stop()
+    file1 = file2 = file3 = file4 = None
+
+    for f in files:
+        f_type = classify_file(f)
+
+        if f_type == "task":
+            file1 = f
+        elif f_type == "attendance":
+            file2 = f
+        elif f_type == "volume":
+            file3 = f
+        elif f_type == "punch":
+            file4 = f
+
+    # ✅ 必须校验
+    if file1 is None:
+        st.error("缺少任务数据（df1）")
         st.stop()
 
-    with st.spinner("Generating dashboard..."):
+    if file2 is None:
+        st.error("缺少班次数据（df2）")
+        st.stop()
+
+    if file3 is None:
+        st.error("缺少件量数据（df3）")
+        st.stop()
+
+    if file4 is None:
+        st.error("缺少打卡数据（df4）")
+        st.stop()
+    
+    # ===== loading UI 初始化（必须在 try 前）=====
+    status_box = st.empty()
+
+    def update_status(msg, type="info"):
+        if type == "success":
+            status_box.success(msg)
+        elif type == "error":
+            status_box.error(msg)
+        else:
+            status_box.info(msg)
+
+    progress = st.progress(0)
+
+    try:
+        update_status(f"📄 任务数据：{file1.name}")
+        update_status(f"👥 班次数据：{file2.name}")
+        update_status(f"📦 件量数据：{file3.name}")
+        update_status(f"🧾 打卡数据：{file4.name}")
+
         df, df2, group_map = load_data(file1, file2)
+        progress.progress(20)
+
+        update_status("📦 读取件量数据...")
+        volume_data = load_volume_data(file3)
+        progress.progress(40)
+
+        update_status("🧾 读取打卡数据...")
+        break_df = load_break_data(file4)
+        progress.progress(60)
+
+        update_status("📊 读取间接工时...")
+        indirect_df = load_indirect_data(file1)
+        progress.progress(70)
+
+        update_status("🧠 构建 timeline...")
+        timeline = build_timeline(df, df2, group_map, break_df)
+        timeline = remove_break_overlap(timeline)
+        progress.progress(85)
+
+        update_status("📈 构建历史数据...")
+        history_ratios, history_wait = build_history(timeline)
+        progress.progress(95)
 
         df["warehouse_short"] = df["warehouse_name"].apply(extract_warehouse)
         current_warehouse = df["warehouse_short"].mode()[0] if not df.empty else "Unknown"
-
-        volume_data = load_volume_data(file3)
-        break_df = load_break_data(file4)
-        indirect_df = load_indirect_data(file1)
-
-        timeline = build_timeline(df, df2, group_map, break_df)
-
-        # ✅ 关键：把 break 时间从 work/idle 里切掉，避免 hover 抢到绿色
-        timeline = remove_break_overlap(timeline)
-
-        history_ratios, history_wait = build_history(timeline)
 
         st.session_state["df"] = df
         st.session_state["df2"] = df2
@@ -1152,6 +1231,13 @@ if generate_btn:
         st.session_state["current_warehouse"] = current_warehouse
         st.session_state["history_ratios"] = history_ratios
         st.session_state["history_wait"] = history_wait
+
+        progress.progress(100)
+        update_status("✅ Dashboard 生成完成", "success")
+
+    except Exception as e:
+        update_status(f"❌ 出错：{str(e)}", "error")
+        st.stop()
 
 if "timeline" not in st.session_state:
     st.info("上传文件后点击 Generate Dashboard。")
