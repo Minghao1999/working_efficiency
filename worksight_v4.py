@@ -94,6 +94,7 @@ def load_data(file1, file2):
     df2.columns = df2.columns.str.strip()
 
     df2["employee_no"] = df2.iloc[:, 1].astype(str).str.strip()
+    df2["班次名称"] = df2.iloc[:, 7].astype(str).str.strip()
     df2["real_name"] = df2.iloc[:, 3].astype(str).str.strip()
     df2["上班时间"] = pd.to_datetime(df2.iloc[:, 13], errors="coerce")
     df2["下班时间"] = pd.to_datetime(df2.iloc[:, 18], errors="coerce")
@@ -330,7 +331,15 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
         day = work_start.date()
         processed.add((emp_no, day))
 
-        shift = "morning" if work_start.hour < 12 else "evening"
+        # ✅ 优先用班次名称判断
+        shift_name = str(row.get("班次名称", ""))
+
+        if any(x in shift_name for x in ["早", "白"]):
+            shift = "morning"
+        elif "晚" in shift_name:
+            shift = "evening"
+        else:
+            shift = "morning" if work_start.hour < 15 else "evening"
 
         tasks = df[
             (df["employee_no"].astype(str) == emp_no) &
@@ -1135,10 +1144,17 @@ st.title("WorkSight Pro")
 st.caption("Advanced productivity analytics dashboard for ISC, iAMS, volume, and punch data")
 
 with st.expander("Data Sources", expanded=True):
+    st.markdown("**Upload all files**")
+    st.caption("📄 ISC Task Data：来自 ISC员工操作时长（任务单明细）")
+    st.caption("👥 iAMS Attendance：来自 iAMS班次明细（实际上下班时间）")
+    st.caption("📦 Volume Data：来自 iWMS销售单综合查询（打包完成时间 & 件数）")
+    st.caption("🧾 Punch Data：来自 iAMS打卡流水（进出仓记录）")
+
     files = st.file_uploader(
-        "Upload all files (ISC / iAMS / Volume / Punch)",
+        "Upload all files",
         type=["xlsx", "xls"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        label_visibility="collapsed"
     )
 generate_btn = st.button("Generate Dashboard", type="primary")
 
@@ -1162,7 +1178,7 @@ if generate_btn:
 
     # ✅ 必须校验
     if file1 is None:
-        st.error("缺少任务数据（df1）")
+        st.error("缺少任务单明细（df1）")
         st.stop()
 
     if file2 is None:
@@ -1272,42 +1288,14 @@ summary = build_summary(df_day, df, df2, current_day)
 st.subheader("KPI Dashboard")
 
 def calc_attendance_and_work(df_day, df, df2, current_day):
-    total_attendance = 0
-    total_work = 0
 
-    for name, group in df_day.groupby("name"):
+    # ✅ 1. 计算总 work（绿色）
+    total_work = df_day[df_day["type"].isin(["work", "overnight"])]["duration"].sum()
 
-        # ✅ 有效工作时间 = 任务时间累加
-        work_hours = group[group["type"].isin(["work", "overnight"])]["duration"].sum()
+    # ✅ 2. 计算总 attendance（所有人上班时间）
+    total_attendance = df_day["duration"].sum()
 
-        # 👉 解析 emp_no
-        if "(" in name:
-            emp_no = name.split("(")[-1].replace(")", "").strip()
-        else:
-            emp_no = name
-
-        # ✅ 优先用 iAMS 上下班
-        row_iams = df2[
-            (df2["employee_no"].astype(str) == emp_no) &
-            (df2["上班时间"].apply(adjust_work_date) == current_day)
-        ]
-
-        if not row_iams.empty:
-            start = row_iams["上班时间"].iloc[0]
-            end = row_iams["下班时间"].iloc[0]
-        else:
-            # ✅ fallback：用任务时间
-            start = group["start"].min()
-            end = group["end"].max()
-
-        if pd.notna(start) and pd.notna(end) and end > start:
-            attendance = (end - start).total_seconds() / 3600
-        else:
-            attendance = 0
-
-        total_work += work_hours
-        total_attendance += attendance
-
+    # ✅ 3. 比例
     ratio = (total_work / total_attendance * 100) if total_attendance > 0 else 0
 
     return total_work, total_attendance, ratio
