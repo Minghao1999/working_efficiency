@@ -1152,7 +1152,7 @@ st.caption("Advanced productivity analytics dashboard for ISC, iAMS, volume, and
 
 with st.expander("Data Sources", expanded=True):
     st.markdown("**Upload all files**")
-    st.caption("📄 ISC Task Data：来自 ISC员工操作时长（任务单明细）")
+    st.caption("📄 ISC Task Data：来自 ISC员工操作时长（需要使用Global Export）")
     st.caption("👥 iAMS Attendance：来自 iAMS班次明细（实际上下班时间）")
     st.caption("📦 Volume Data：来自 iWMS销售单综合查询（打包完成时间 & 件数）")
     st.caption("🧾 Punch Data：来自 iAMS打卡流水（进出仓记录）")

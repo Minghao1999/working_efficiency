@@ -7,72 +7,66 @@ st.set_page_config(page_title="周单件量分析", layout="wide")
 st.title("📦 周单件量分析")
 
 # ======================
-# 上传 + 来源说明
+# 上传区域
 # ======================
-st.markdown("### 上传件量数据（销售单综合）")
-st.caption("📌 数据来源：iWMS销售单综合查询")
+col_upload1, col_upload2 = st.columns(2)
 
-file = st.file_uploader("", type=["xlsx"], label_visibility="collapsed")
+with col_upload1:
+    st.markdown("### 📦 上传件量数据")
+    st.caption("📌 来源：iWMS销售单综合查询")
+    file = st.file_uploader("", type=["xlsx"], key="volume")
 
+with col_upload2:
+    st.markdown("### ⏱ 上传工时数据")
+    st.caption("📌 来源：ISC出勤工时->明细&汇总(需要使用Global Export)")
+    file_isc = st.file_uploader("", type=["xlsx"], key="isc")
+
+# ======================
+# 主逻辑
+# ======================
 if file:
     try:
         df = pd.read_excel(file)
         df.columns = df.columns.str.strip()
 
         # ======================
-        # ✅ 关键字段校验（核心）
+        # 字段校验
         # ======================
         required_cols = ["打包完成时间", "件数", "京东订单号", "状态"]
-
         missing_cols = [col for col in required_cols if col not in df.columns]
 
         if missing_cols:
-            st.warning(f"⚠️ 上传的文件格式不正确，缺少字段：{', '.join(missing_cols)}")
-            st.info("请上传【iWMS销售单综合查询】导出的表")
+            st.warning(f"⚠️ 缺少字段：{', '.join(missing_cols)}")
             st.stop()
 
         # ======================
-        # 1. 时间字段
+        # 时间处理
         # ======================
         df["打包完成时间"] = pd.to_datetime(df["打包完成时间"], errors="coerce")
         df = df.dropna(subset=["打包完成时间"])
 
-        if df.empty:
-            st.warning("⚠️ 时间字段解析失败，数据为空")
-            st.stop()
-
         # ======================
-        # 2. 业务日期（5点切日）
+        # 业务日期（5点切日）
         # ======================
         def get_business_date(dt):
             if pd.isna(dt):
                 return pd.NaT
-            if dt.hour < 5:
-                return (dt - pd.Timedelta(days=1)).date()
-            else:
-                return dt.date()
+            return (dt - pd.Timedelta(days=1)).date() if dt.hour < 5 else dt.date()
 
         df["业务日期"] = df["打包完成时间"].apply(get_business_date)
 
         # ======================
-        # 3. 数据清洗
+        # 数据清洗
         # ======================
         df["件数"] = pd.to_numeric(df["件数"], errors="coerce").fillna(0)
 
-        # ======================
-        # 4. 过滤
-        # ======================
         df = df[df["状态"] == "交接完成"]
 
         if "是否取消" in df.columns:
             df = df[df["是否取消"] != "是"]
 
-        if df.empty:
-            st.warning("⚠️ 过滤后没有有效数据（可能全部被过滤掉）")
-            st.stop()
-
         # ======================
-        # 5. 每日统计
+        # 每日件量
         # ======================
         daily = (
             df.groupby("业务日期")
@@ -81,28 +75,94 @@ if file:
                 件量=("件数", "sum"),
             )
             .reset_index()
-            .sort_values("业务日期")
         )
 
         # ======================
-        # 6. KPI
+        # 🆕 处理 ISC 工时
         # ======================
-        col1, col2 = st.columns(2)
+        if file_isc:
+            df_isc = pd.read_excel(file_isc, sheet_name="日-考勤-日")
+            df_isc.columns = df_isc.columns.str.strip()
+
+            # ⚠️ 根据你实际字段调整
+            required_isc_cols = ["工作日", "考勤时长"]
+
+            missing_isc = [c for c in required_isc_cols if c not in df_isc.columns]
+
+            if missing_isc:
+                st.warning(f"⚠️ ISC表缺少字段：{', '.join(missing_isc)}")
+            else:
+                df_isc["工作日"] = pd.to_datetime(df_isc["工作日"], errors="coerce").dt.date
+                df_isc["考勤时长"] = pd.to_numeric(df_isc["考勤时长"], errors="coerce").fillna(0)
+
+                work_daily = (
+                    df_isc.groupby("工作日")
+                    .agg(
+                        总工时=("考勤时长", "sum"),
+                        出勤人数=("出勤人数", "max"),
+                        加班时长=("加班时长", "sum"),
+                        OT占比=("OT占比", "mean"),
+                    )
+                    .reset_index()
+                    .rename(columns={"工作日": "业务日期"})
+                )
+
+                # 合并
+                daily = pd.merge(daily, work_daily, on="业务日期", how="left")
+
+                # UPPH
+                daily["UPPH"] = (daily["件量"] / daily["总工时"]).round(2)
+
+        daily = daily.sort_values("业务日期")
+
+        # ======================
+        # 🆕 读取仓库名称（明细表）
+        # ======================
+        try:
+            df_wh = pd.read_excel(file_isc, sheet_name="明细&汇总-图表")
+            df_wh.columns = df_wh.columns.str.strip()
+
+            if "仓库名称" in df_wh.columns:
+                wh_name_full = df_wh["仓库名称"].dropna().iloc[0]
+
+                # 提取 “5号仓”
+                import re
+                match = re.search(r"(\d+号仓)", str(wh_name_full))
+                warehouse_name = match.group(1) if match else wh_name_full
+            else:
+                warehouse_name = "未知仓库"
+
+        except:
+            warehouse_name = "未知仓库"
+
+        # ======================
+        # KPI
+        # ======================
+        # ======================
+        # 🎯 仓库目标UPPH（写死规则）
+        # ======================
+        TARGET_MAP = {
+            "1号仓": 34.57,
+            "2号仓": 37.11,
+            "5号仓": 11.3
+        }
+
+        target_upph = TARGET_MAP.get(warehouse_name, 11.3)
+        col1, col2, col3 = st.columns(3)
 
         total_orders = int(daily["单量"].sum())
         total_units = int(daily["件量"].sum())
 
+        col1, col2, col3 = st.columns(3)
+
         col1.metric("总单量", total_orders)
         col2.metric("总件量", total_units)
+        col3.metric("仓库", warehouse_name)
+        if file_isc:
+            st.metric("目标UPPH", target_upph)
 
         # ======================
-        # 7. 每日趋势
-        # ======================
-        st.subheader("📈 每日单量 / 件量趋势")
-        st.line_chart(daily.set_index("业务日期")[["单量", "件量"]])
-
-        # ======================
-        # 8. 下载 Excel
+        # 下载
         # ======================
         def to_excel(df):
             output = BytesIO()
@@ -110,25 +170,28 @@ if file:
                 df.to_excel(writer, index=False, sheet_name="每日明细")
             return output.getvalue()
 
-        excel_data = to_excel(daily)
-
         st.download_button(
-            label="📥 下载每日明细 Excel",
-            data=excel_data,
-            file_name="每日单量件量.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "📥 下载Excel",
+            data=to_excel(daily),
+            file_name="单量件量UPPH.xlsx",
         )
 
         # ======================
-        # 9. 表格
+        # 表格
         # ======================
+        def highlight_low_upph(row):
+            if "UPPH" in row and pd.notna(row["UPPH"]):
+                if row["UPPH"] < target_upph:
+                    return ["background-color: #ffe6e6"] * len(row)
+            return [""] * len(row)
         st.subheader("📋 每日明细")
-        st.dataframe(daily, width="stretch")
+        styled_df = daily.style.apply(highlight_low_upph, axis=1)
+
+        st.dataframe(styled_df, use_container_width=True)
 
     except Exception as e:
-        # ✅ 最终兜底（不会再爆红）
-        st.error("❌ 文件解析失败，请确认上传的是正确格式的Excel")
-        st.caption("（常见原因：不是销售单综合表 / 表头不对 / 文件损坏）")
+        st.error("❌ 文件解析失败")
+        st.caption(str(e))
 
 else:
     st.info("请上传销售单综合数据")
