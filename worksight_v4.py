@@ -425,7 +425,14 @@ def build_timeline(df, df2, group_mapping, df_breaks=None):
             if pd.isna(work_start) or pd.isna(work_end):
                 continue
 
-            shift = "morning" if work_start.hour < 12 else "evening"
+            shift_name = str(group.iloc[0].get("班次名称", ""))
+
+            if any(x in shift_name for x in ["早", "白"]):
+                shift = "morning"
+            elif "晚" in shift_name:
+                shift = "evening"
+            else:
+                shift = "morning" if work_start.hour < 15 else "evening"
 
             group = group.copy()
             group["employee_no"] = emp_no
