@@ -58,9 +58,15 @@ function App() {
         <button className={page === "weekly" ? "nav active" : "nav"} onClick={() => setPage("weekly")}>Order / Unit Analysis</button>
       </aside>
       <main>
-        {page === "home" && <Home onNavigate={setPage} />}
-        {page === "efficiency" && <EfficiencyPage />}
-        {page === "weekly" && <WeeklyPage />}
+        <div className="page-view" hidden={page !== "home"}>
+          <Home onNavigate={setPage} />
+        </div>
+        <div className="page-view" hidden={page !== "efficiency"}>
+          <EfficiencyPage />
+        </div>
+        <div className="page-view" hidden={page !== "weekly"}>
+          <WeeklyPage />
+        </div>
       </main>
     </div>
   );
@@ -100,6 +106,14 @@ function EfficiencyPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState({ value: 0, label: "" });
+
+  function addEfficiencyFiles(nextFiles) {
+    setFiles((current) => mergeFiles(current, nextFiles));
+  }
+
+  function removeEfficiencyFile(fileKey) {
+    setFiles((current) => current.filter((file) => fileIdentity(file) !== fileKey));
+  }
 
   async function submit() {
     setError("");
@@ -154,7 +168,8 @@ function EfficiencyPage() {
           <div>📦 Volume Data：来自 iWMS销售单综合查询（打包完成时间 & 件数） · Optional</div>
           <div>🧾 Punch Data：来自 iAMS打卡流水（进出仓记录） · Optional</div>
         </div>
-        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={setFiles} />
+        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={addEfficiencyFiles} />
+        <SelectedFiles files={files} onRemove={removeEfficiencyFile} />
         <button className="primary-btn" disabled={loading || !files.length} onClick={submit}>
           {loading ? "Generating..." : "Generate Dashboard"}
         </button>
@@ -245,7 +260,7 @@ function WeeklyPage() {
       const form = new FormData();
       form.append("volume", volume);
       if (laborMode === "excel" && isc) form.append("isc", isc);
-      if (laborMode === "excel" && pick) form.append("pick", pick);
+      if (pick) form.append("pick", pick);
 
       try {
         const res = await fetch(`${API}/api/weekly/analyze`, {
@@ -276,7 +291,6 @@ function WeeklyPage() {
   useEffect(() => {
     if (laborMode === "manual") {
       setIsc(null);
-      setPick(null);
     }
   }, [laborMode]);
 
@@ -321,7 +335,7 @@ function WeeklyPage() {
       <div className="upload-grid">
         <UploadBox title="Upload Unit Data" caption="iWMS 销售单综合查询" onChange={setVolume} />
         <LaborHoursInput mode={laborMode} setMode={setLaborMode} onFileChange={setIsc} />
-        <UploadBox title="Upload Picking Data" caption="iWMS 拣货结果查询" disabled={laborMode === "manual"} onChange={setPick} />
+        <UploadBox title="Upload Picking Data" caption="iWMS 拣货结果查询" onChange={setPick} />
       </div>
       {loading && <ProgressBar value={72} label="Analyzing uploaded files..." />}
       {error && <div className="error">{error}</div>}
@@ -421,6 +435,35 @@ function FilePicker({ multiple = false, accept, disabled = false, files = [], on
       <em>{label}</em>
     </label>
   );
+}
+
+function SelectedFiles({ files, onRemove }) {
+  if (!files.length) return null;
+  return (
+    <div className="selected-files">
+      {files.map((file) => {
+        const key = fileIdentity(file);
+        return (
+          <div className="selected-file" key={key}>
+            <span>{file.name}</span>
+            <button type="button" onClick={() => onRemove(key)}>Remove</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function fileIdentity(file) {
+  return `${file.name}|${file.size ?? 0}|${file.lastModified ?? 0}`;
+}
+
+function mergeFiles(current, nextFiles) {
+  const map = new Map(current.map((file) => [fileIdentity(file), file]));
+  for (const file of nextFiles) {
+    map.set(fileIdentity(file), file);
+  }
+  return [...map.values()];
 }
 
 function Metric({ icon, label, value }) {

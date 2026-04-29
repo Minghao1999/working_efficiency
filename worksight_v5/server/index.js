@@ -586,7 +586,7 @@ function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
   daily.sort((a, b) => String(a.业务日期).localeCompare(String(b.业务日期)));
   const targetUpph = TARGET_MAP[warehouseName] || 11.3;
   let personEfficiency = [];
-  if (pickFile && iscFile) personEfficiency = analyzePickEfficiency(pickFile, iscFile, targetUpph);
+  if (pickFile) personEfficiency = analyzePickEfficiency(pickFile, iscFile, targetUpph);
   return {
     kpi: { totalOrders: sum(daily, (r) => r.单量), totalUnits: sum(daily, (r) => r.件量), warehouseName, targetUpph },
     daily,
@@ -620,7 +620,9 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph) {
       timeMap.set(key, (timeMap.get(key) || 0) + (taskSeconds + interval) / 3600);
     }
   }
-  const attRows = sheetRows(iscFile, "明细&汇总-图表").map((r) => ({ 日期: dayKey(parseDate(val(r, "日"))), 工号: String(val(r, "员工号") ?? "").trim(), 考勤时长: num(val(r, "考勤时长"), 0) }));
+  const attRows = iscFile
+    ? sheetRows(iscFile, "明细&汇总-图表").map((r) => ({ 日期: dayKey(parseDate(val(r, "日"))), 工号: String(val(r, "员工号") ?? "").trim(), 考勤时长: num(val(r, "考勤时长"), 0) }))
+    : [];
   const attMap = new Map();
   for (const [key, items] of groupBy(attRows, (r) => `${r.日期}|${r.工号}`)) attMap.set(key, sum(items, (r) => r.考勤时长));
   const nameMap = new Map(pick.map((r) => [r.工号, r.姓名]));
@@ -629,10 +631,23 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph) {
     const 件数 = qtyMap.get(key) || 0;
     const 总件数 = rawMap.get(key) || 0;
     const 有效工时 = timeMap.get(key) || 0;
-    const 考勤时长 = attMap.get(key) || 0;
+    const hasAttendance = attMap.has(key);
+    const 考勤时长 = hasAttendance ? attMap.get(key) || 0 : "";
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
     const 总效率 = 有效工时 ? 总件数 / 有效工时 : 0;
-    return { 日期, 工号, 姓名: nameMap.get(工号) || "", 总件数, 件数, 有效工时, 考勤时长, 有效工时占比: 考勤时长 ? 有效工时 / 考勤时长 : 0, 拣非爆品效率, 总效率, 低于目标: 拣非爆品效率 < targetUpph };
+    return {
+      日期,
+      工号,
+      姓名: nameMap.get(工号) || "",
+      总件数,
+      件数,
+      有效工时,
+      考勤时长,
+      有效工时占比: hasAttendance && 考勤时长 ? 有效工时 / 考勤时长 : "",
+      拣非爆品效率,
+      总效率,
+      低于目标: 拣非爆品效率 < targetUpph
+    };
   }).sort((a, b) => a.日期.localeCompare(b.日期) || b.拣非爆品效率 - a.拣非爆品效率);
 }
 

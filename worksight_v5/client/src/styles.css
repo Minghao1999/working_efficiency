@@ -86,6 +86,10 @@ main {
   flex: 1;
 }
 
+.page-view[hidden] {
+  display: none;
+}
+
 .page {
   width: min(1480px, calc(100vw - 40px));
   margin: 0 auto;
@@ -364,6 +368,49 @@ select:focus,
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.selected-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.selected-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #344054;
+  font-size: 13px;
+}
+
+.selected-file span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-file button {
+  border: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475467;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 3px 8px;
+}
+
+.selected-file button:hover {
+  color: #b42318;
+  background: #fee4e2;
 }
 
 .tabs {
