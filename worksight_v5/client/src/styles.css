@@ -250,6 +250,59 @@ main {
   background: #f8fafc;
 }
 
+.ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.danger-btn {
+  min-height: 40px;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: #dc2626;
+  color: #ffffff;
+  padding: 0 16px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.modal {
+  width: min(420px, 100%);
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 22px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+}
+
+.modal h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 22px;
+}
+
+.modal p {
+  margin: 10px 0 20px;
+  color: #475467;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .metric {
   min-height: 104px;
   padding: 16px;
@@ -296,6 +349,12 @@ main {
   margin: 12px 0;
 }
 
+.button-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .select-line,
 .toolbar label {
   display: inline-flex;
@@ -303,6 +362,21 @@ main {
   gap: 10px;
   color: #344054;
   font-weight: 750;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 8px 0 14px;
+}
+
+.chart-strip {
+  margin: 8px 0 18px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 select {
@@ -364,6 +438,49 @@ select:focus,
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.selected-files {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.selected-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px 8px 12px;
+  color: #344054;
+  font-weight: 700;
+}
+
+.selected-file span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.selected-file button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #b42318;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.selected-file button:hover {
+  background: #fef3f2;
 }
 
 .tabs {
@@ -521,6 +638,7 @@ tbody tr:last-child td { border-bottom: 0; }
   color: #b42318;
   background: #fef3f2;
   border: 1px solid #fecdca;
+  white-space: pre-line;
 }
 
 .success {

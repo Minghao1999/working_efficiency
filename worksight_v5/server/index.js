@@ -24,6 +24,21 @@ function sheetRows(file, sheetName = null) {
   });
 }
 
+function workbook(file) {
+  return XLSX.read(file.buffer, { type: "buffer", cellDates: true });
+}
+
+function sheetRowsFromWorkbook(wb, sheetName = null) {
+  const name = sheetName || wb.SheetNames[0];
+  const ws = wb.Sheets[name];
+  if (!ws) throw new Error(`找不到 sheet：${name}`);
+  return XLSX.utils.sheet_to_json(ws, { defval: null, raw: false }).map((row) => {
+    const out = {};
+    for (const [key, value] of Object.entries(row)) out[String(key).trim()] = value;
+    return out;
+  });
+}
+
 function firstSheetRows(file, n = 5) {
   return sheetRows(file).slice(0, n);
 }
@@ -39,6 +54,34 @@ function val(row, key) {
 function colAt(row, idx) {
   const keys = Object.keys(row || {});
   return row?.[keys[idx]] ?? null;
+}
+
+function firstPresentColumn(rows, candidates) {
+  const available = new Set(cols(rows));
+  return candidates.find((column) => available.has(column)) || null;
+}
+
+function uploadValidationError(detail) {
+  const error = new Error("上传表格校验失败");
+  error.status = 400;
+  error.details = [detail];
+  return error;
+}
+
+function validateRows({ file, wb, sheetName = null, label, requiredColumns = [], columnGroups = [] }) {
+  const missingSheets = sheetName && !wb.SheetNames.includes(sheetName) ? [sheetName] : [];
+  if (missingSheets.length) {
+    throw uploadValidationError({ label, file: file.originalname, missingSheets });
+  }
+
+  const rows = sheetRowsFromWorkbook(wb, sheetName);
+  const available = new Set(cols(rows));
+  const missingColumns = requiredColumns.filter((column) => !available.has(column));
+  const missingColumnGroups = columnGroups.filter((group) => !group.some((column) => available.has(column)));
+  if (missingColumns.length || missingColumnGroups.length) {
+    throw uploadValidationError({ label, file: file.originalname, sheet: sheetName || wb.SheetNames[0], missingColumns, missingColumnGroups });
+  }
+  return rows;
 }
 
 function parseDate(v) {
@@ -543,20 +586,34 @@ function analyzeEfficiency(files) {
 }
 
 function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
-  const rows = sheetRows(volumeFile);
-  const required = ["打包完成时间", "件数", "京东订单号", "状态"];
-  const missing = required.filter((c) => !cols(rows).includes(c));
-  if (missing.length) throw new Error(`缺少字段：${missing.join(", ")}`);
-  const filtered = rows
-    .map((r) => ({ ...r, 打包完成时间: parseDate(val(r, "打包完成时间")), 件数: num(val(r, "件数"), 0) }))
-    .filter((r) => r.打包完成时间 && val(r, "状态") === "交接完成" && val(r, "是否取消") !== "是");
   const daily = [];
-  for (const [date, items] of groupBy(filtered, (r) => businessDate(r.打包完成时间))) {
-    daily.push({ 业务日期: date, 单量: new Set(items.map((r) => val(r, "京东订单号"))).size, 件量: sum(items, (r) => r.件数) });
+  const volumeDates = [];
+  if (volumeFile) {
+    const volumeWb = workbook(volumeFile);
+    const rows = validateRows({
+      file: volumeFile,
+      wb: volumeWb,
+      label: "Upload Unit Data",
+      requiredColumns: ["打包完成时间", "件数", "京东订单号", "状态"]
+    });
+    const filtered = rows
+      .map((r) => ({ ...r, 打包完成时间: parseDate(val(r, "打包完成时间")), 件数: num(val(r, "件数"), 0) }))
+      .filter((r) => r.打包完成时间 && val(r, "状态") === "交接完成" && val(r, "是否取消") !== "是");
+    for (const [date, items] of groupBy(filtered, (r) => businessDate(r.打包完成时间))) {
+      daily.push({ 业务日期: date, 单量: new Set(items.map((r) => val(r, "京东订单号"))).size, 件量: sum(items, (r) => r.件数) });
+      volumeDates.push(date);
+    }
   }
-  let warehouseName = "未知仓库";
+  let warehouseName = "";
   if (iscFile) {
-    const isc = sheetRows(iscFile, "日-考勤-日");
+    const iscWb = workbook(iscFile);
+    const isc = validateRows({
+      file: iscFile,
+      wb: iscWb,
+      sheetName: "日-考勤-日",
+      label: "Labor Hours",
+      requiredColumns: ["工作日", "考勤时长", "出勤人数"]
+    });
     const workDaily = new Map();
     for (const [date, items] of groupBy(isc.map((r) => ({ ...r, 工作日: dayKey(parseDate(val(r, "工作日"))), 考勤时长: num(val(r, "考勤时长"), 0) })), (r) => r.工作日)) {
       workDaily.set(date, {
@@ -578,15 +635,15 @@ function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
       }
     }
     try {
-      const whRows = sheetRows(iscFile, "明细&汇总-图表");
+      const whRows = sheetRowsFromWorkbook(iscWb, "明细&汇总-图表");
       const wh = whRows.map((r) => val(r, "仓库名称")).find(Boolean);
       warehouseName = extractWarehouse(wh) || "未知仓库";
     } catch {}
   }
   daily.sort((a, b) => String(a.业务日期).localeCompare(String(b.业务日期)));
-  const targetUpph = TARGET_MAP[warehouseName] || 11.3;
+  const targetUpph = iscFile ? (TARGET_MAP[warehouseName] || 11.3) : "";
   let personEfficiency = [];
-  if (pickFile && iscFile) personEfficiency = analyzePickEfficiency(pickFile, iscFile, targetUpph);
+  if (pickFile) personEfficiency = analyzePickEfficiency(pickFile, iscFile, targetUpph, volumeDates);
   return {
     kpi: { totalOrders: sum(daily, (r) => r.单量), totalUnits: sum(daily, (r) => r.件量), warehouseName, targetUpph },
     daily,
@@ -594,46 +651,100 @@ function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
   };
 }
 
-function analyzePickEfficiency(pickFile, iscFile, targetUpph) {
-  const pick = sheetRows(pickFile)
-    .map((r) => ({ ...r, 拣货完成时间: parseDate(val(r, "拣货完成时间")), 拣货开始时间: parseDate(val(r, "拣货开始时间")), 实际拣货量: num(val(r, "实际拣货量"), 0), 工号: String(val(r, "工号") ?? "").trim(), 姓名: val(r, "姓名") }))
+function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []) {
+  const pickWb = workbook(pickFile);
+  const pickRows = validateRows({
+    file: pickFile,
+    wb: pickWb,
+    label: "Upload Picking Data",
+    requiredColumns: ["拣货完成时间", "姓名"],
+    columnGroups: [
+      ["拣货开始时间", "任务领取时间"],
+      ["实际拣货量", "拣货数量", "拣货件数", "件数"]
+    ]
+  });
+  const pickStartColumn = firstPresentColumn(pickRows, ["拣货开始时间", "任务领取时间"]);
+  const pickQtyColumn = firstPresentColumn(pickRows, ["实际拣货量", "拣货数量", "拣货件数", "件数"]);
+  const pickEmployeeColumn = firstPresentColumn(pickRows, ["工号", "员工号"]);
+  const pickTaskColumn = firstPresentColumn(pickRows, ["任务单号", "集合单号"]);
+  const pick = pickRows
+    .map((r, idx) => {
+      const name = String(val(r, "姓名") ?? "").trim();
+      const employeeNo = String(pickEmployeeColumn ? val(r, pickEmployeeColumn) ?? "" : "").trim();
+      return {
+        ...r,
+        拣货完成时间: parseDate(val(r, "拣货完成时间")),
+        拣货开始时间: parseDate(val(r, pickStartColumn)),
+        实际拣货量: num(val(r, pickQtyColumn), 0),
+        工号: employeeNo || name,
+        姓名: name,
+        _task_no: pickTaskColumn ? val(r, pickTaskColumn) : `row-${idx}`,
+        _row_idx: idx
+      };
+    })
     .filter((r) => r.拣货完成时间);
-  for (const r of pick) r.日期 = dayKey(r.拣货完成时间);
+  const fallbackDate = fallbackDates[0] || "Unknown Date";
+  for (const r of pick) r.日期 = dayKey(r.拣货开始时间 || r.拣货完成时间) || fallbackDate;
   const rawMap = new Map();
   for (const [key, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) rawMap.set(key, sum(items, (r) => r.实际拣货量));
   const unique = [];
   const seen = new Set();
   for (const r of pick) {
-    const k = `${val(r, "储位")}|${r.拣货完成时间?.toISOString()}|${val(r, "任务单号")}|${r.工号}`;
+    const location = val(r, "储位") ?? val(r, "库位") ?? r._row_idx;
+    const k = `${location}|${r.拣货完成时间?.toISOString()}|${r._task_no}|${r.工号}`;
     if (!seen.has(k)) { seen.add(k); unique.push(r); }
   }
   const qtyMap = new Map();
   for (const [key, items] of groupBy(unique, (r) => `${r.日期}|${r.工号}`)) qtyMap.set(key, sum(items, (r) => r.实际拣货量));
   const timeMap = new Map();
-  for (const [, items] of groupBy(pick, (r) => r.工号)) {
-    const sorted = items.sort((a, b) => a.拣货完成时间 - b.拣货完成时间);
-    for (let i = 0; i < sorted.length; i++) {
-      const r = sorted[i];
-      const taskSeconds = r.拣货开始时间 ? Math.min(600, Math.max(0, (r.拣货完成时间 - r.拣货开始时间) / 1000)) : 0;
-      const interval = sorted[i + 1] ? Math.min(600, Math.max(0, (sorted[i + 1].拣货完成时间 - r.拣货完成时间) / 1000)) : 0;
-      const key = `${r.日期}|${r.工号}`;
-      timeMap.set(key, (timeMap.get(key) || 0) + (taskSeconds + interval) / 3600);
-    }
+  const taskEvents = [];
+  for (const [taskKey, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}|${r._task_no}`)) {
+    const [日期, 工号] = taskKey.split("|");
+    const starts = items.map((r) => parseDate(r.拣货开始时间)).filter(Boolean);
+    const ends = items.map((r) => parseDate(r.拣货完成时间)).filter(Boolean);
+    const end = ends.sort((a, b) => b - a)[0];
+    if (!end) continue;
+    const start = starts.sort((a, b) => a - b)[0] || end;
+    taskEvents.push({ 日期, 工号, start, end });
   }
-  const attRows = sheetRows(iscFile, "明细&汇总-图表").map((r) => ({ 日期: dayKey(parseDate(val(r, "日"))), 工号: String(val(r, "员工号") ?? "").trim(), 考勤时长: num(val(r, "考勤时长"), 0) }));
+  for (const [key, items] of groupBy(taskEvents, (r) => `${r.日期}|${r.工号}`)) {
+    const sorted = items.sort((a, b) => a.end - b.end);
+    let hours = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const task = sorted[i];
+      const taskSeconds = Math.min(1200, Math.max(0, (task.end - task.start) / 1000));
+      const next = sorted[i + 1];
+      const interval = next && next.start > task.end ? Math.min(1200, Math.max(0, (next.start - task.end) / 1000)) : 0;
+      hours += (taskSeconds + interval) / 3600;
+    }
+    timeMap.set(key, hours);
+  }
   const attMap = new Map();
-  for (const [key, items] of groupBy(attRows, (r) => `${r.日期}|${r.工号}`)) attMap.set(key, sum(items, (r) => r.考勤时长));
+  if (iscFile) {
+    const iscWb = workbook(iscFile);
+    const rawAttRows = validateRows({
+      file: iscFile,
+      wb: iscWb,
+      sheetName: "明细&汇总-图表",
+      label: "Labor Hours",
+      requiredColumns: ["日", "员工号", "考勤时长"]
+    });
+    const attRows = rawAttRows.map((r) => ({ 日期: dayKey(parseDate(val(r, "日"))), 工号: String(val(r, "员工号") ?? "").trim(), 考勤时长: num(val(r, "考勤时长"), 0) }));
+    for (const [key, items] of groupBy(attRows, (r) => `${r.日期}|${r.工号}`)) attMap.set(key, sum(items, (r) => r.考勤时长));
+  }
   const nameMap = new Map(pick.map((r) => [r.工号, r.姓名]));
   return [...qtyMap.keys()].map((key) => {
     const [日期, 工号] = key.split("|");
     const 件数 = qtyMap.get(key) || 0;
     const 总件数 = rawMap.get(key) || 0;
-    const 有效工时 = timeMap.get(key) || 0;
-    const 考勤时长 = attMap.get(key) || 0;
+    const 考勤时长 = iscFile ? (attMap.get(key) || 0) : "";
+    const rawEffectiveHours = timeMap.get(key) || 0;
+    const effectiveCap = 考勤时长 ? Math.min(考勤时长, 8) : 8;
+    const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
     const 总效率 = 有效工时 ? 总件数 / 有效工时 : 0;
-    return { 日期, 工号, 姓名: nameMap.get(工号) || "", 总件数, 件数, 有效工时, 考勤时长, 有效工时占比: 考勤时长 ? 有效工时 / 考勤时长 : 0, 拣非爆品效率, 总效率, 低于目标: 拣非爆品效率 < targetUpph };
-  }).sort((a, b) => a.日期.localeCompare(b.日期) || b.拣非爆品效率 - a.拣非爆品效率);
+    return { 日期, 工号, 姓名: nameMap.get(工号) || "", 总件数, 件数, 有效工时, 考勤时长, 有效工时占比: 考勤时长 ? 有效工时 / 考勤时长 : "", 拣非爆品效率, 总效率, 低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : "" };
+  }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
 }
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -642,17 +753,19 @@ app.post("/api/efficiency/analyze", upload.array("files"), (req, res) => {
   try {
     res.json(analyzeEfficiency(req.files || []));
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }
 });
 
 app.post("/api/weekly/analyze", upload.fields([{ name: "volume", maxCount: 1 }, { name: "isc", maxCount: 1 }, { name: "pick", maxCount: 1 }]), (req, res) => {
   try {
     const volumeFile = req.files?.volume?.[0];
-    if (!volumeFile) throw new Error("请上传销售单综合数据");
-    res.json(analyzeWeekly({ volumeFile, iscFile: req.files?.isc?.[0], pickFile: req.files?.pick?.[0] }));
+    const iscFile = req.files?.isc?.[0];
+    const pickFile = req.files?.pick?.[0];
+    if (!volumeFile && !iscFile && !pickFile) throw new Error("请至少上传一个表格");
+    res.json(analyzeWeekly({ volumeFile, iscFile, pickFile }));
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }
 });
 
