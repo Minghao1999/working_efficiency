@@ -737,6 +737,7 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
     const [日期, 工号] = key.split("|");
     const 件数 = qtyMap.get(key) || 0;
     const 总件数 = rawMap.get(key) || 0;
+<<<<<<< HEAD
     const hasAttendance = attMap.has(key);
     const 考勤时长 = hasAttendance ? attMap.get(key) || 0 : "";
     const rawEffectiveHours = timeMap.get(key) || 0;
@@ -757,6 +758,15 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
       总效率,
       低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : ""
     };
+=======
+    const 考勤时长 = iscFile ? (attMap.get(key) || 0) : "";
+    const rawEffectiveHours = timeMap.get(key) || 0;
+    const effectiveCap = 考勤时长 ? Math.min(考勤时长, 8) : 8;
+    const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
+    const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
+    const 总效率 = 有效工时 ? 总件数 / 有效工时 : 0;
+    return { 日期, 工号, 姓名: nameMap.get(工号) || "", 总件数, 件数, 有效工时, 考勤时长, 有效工时占比: 考勤时长 ? 有效工时 / 考勤时长 : "", 拣非爆品效率, 总效率, 低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : "" };
+>>>>>>> f1087cb6b5064aad7f21f052a7b8d82876c1b1c8
   }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
 }
 

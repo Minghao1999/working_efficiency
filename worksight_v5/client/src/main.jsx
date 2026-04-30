@@ -58,9 +58,15 @@ function App() {
         <button className={page === "weekly" ? "nav active" : "nav"} onClick={() => setPage("weekly")}>Order / Unit Analysis</button>
       </aside>
       <main>
-        {page === "home" && <Home onNavigate={setPage} />}
-        {page === "efficiency" && <EfficiencyPage />}
-        {page === "weekly" && <WeeklyPage />}
+        <div hidden={page !== "home"}>
+          <Home onNavigate={setPage} />
+        </div>
+        <div hidden={page !== "efficiency"}>
+          <EfficiencyPage />
+        </div>
+        <div hidden={page !== "weekly"}>
+          <WeeklyPage />
+        </div>
       </main>
     </div>
   );
@@ -177,7 +183,8 @@ function EfficiencyPage() {
           <div>📦 Volume Data：来自 iWMS销售单综合查询（打包完成时间 & 件数） · Optional</div>
           <div>🧾 Punch Data：来自 iAMS打卡流水（进出仓记录） · Optional</div>
         </div>
-        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={setFiles} />
+        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={addEfficiencyFiles} />
+        <SelectedFileList files={files} onRemove={removeEfficiencyFile} />
         <button className="primary-btn" disabled={loading || !files.length} onClick={submit}>
           {loading ? "Generating..." : "Generate Dashboard"}
         </button>
@@ -501,6 +508,22 @@ function FilePicker({ multiple = false, accept, disabled = false, files = [], on
       />
       <em>{label}</em>
     </label>
+  );
+}
+
+function SelectedFileList({ files, onRemove }) {
+  if (!files.length) return null;
+  return (
+    <div className="selected-files">
+      {files.map((file, index) => (
+        <div className="selected-file" key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
+          <span>{file.name}</span>
+          <button type="button" onClick={() => onRemove(index)} aria-label={`Remove ${file.name}`}>
+            <Trash2 size={15} />
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 
