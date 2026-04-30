@@ -6,7 +6,10 @@ import exportRouter from "./routes/export.js";
 
 const app = express();
 
-app.use(cors());
+const allowedOrigin = process.env.FRONTEND_URL;
+app.use(cors({
+  origin: allowedOrigin || true
+}));
 app.use(express.json({ limit: "20mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));

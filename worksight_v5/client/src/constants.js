@@ -1,4 +1,4 @@
-export const API = "http://127.0.0.1:3001";
+export const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:3001";
 
 export const TYPE_COLORS = {
   work: "#7EC398",
