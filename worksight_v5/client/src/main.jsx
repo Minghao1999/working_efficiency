@@ -50,7 +50,7 @@ function App() {
           <BarChart3 size={28} />
           <div>
             <strong>WorkSight Pro</strong>
-            <span>Warehouse Operations Analytics</span>
+            <span>JD Logistics</span>
           </div>
         </div>
         <button className={page === "home" ? "nav active" : "nav"} onClick={() => setPage("home")}>Overview</button>
@@ -97,6 +97,7 @@ function Home({ onNavigate }) {
 
 function EfficiencyPage() {
   const [files, setFiles] = useState([]);
+  const [sessionId] = useState(() => `eff-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const [data, setData] = useState(null);
   const [date, setDate] = useState("");
   const [tab, setTab] = useState("morning");
@@ -106,6 +107,7 @@ function EfficiencyPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState({ value: 0, label: "" });
+  const [submittedFileKeys, setSubmittedFileKeys] = useState(new Set());
 
   function addEfficiencyFiles(nextFiles) {
     setFiles((current) => mergeFiles(current, nextFiles));
@@ -113,28 +115,55 @@ function EfficiencyPage() {
 
   function removeEfficiencyFile(fileKey) {
     setFiles((current) => current.filter((file) => fileIdentity(file) !== fileKey));
+    setSubmittedFileKeys((current) => {
+      const next = new Set(current);
+      next.delete(fileKey);
+      return next;
+    });
   }
 
   async function submit() {
     setError("");
     setLoading(true);
-    setProgress({ value: 8, label: "Uploading files..." });
-    const progressTimers = [
-      setTimeout(() => setProgress({ value: 22, label: "Classifying uploaded workbooks..." }), 450),
-      setTimeout(() => setProgress({ value: 42, label: "Reading Excel sheets..." }), 1200),
-      setTimeout(() => setProgress({ value: 62, label: "Building employee timelines..." }), 2200),
-      setTimeout(() => setProgress({ value: 78, label: "Calculating KPIs and history..." }), 3600),
-      setTimeout(() => setProgress({ value: 90, label: "Preparing dashboard data..." }), 5200)
-    ];
     const form = new FormData();
-    files.forEach((file) => form.append("files", file));
+    form.append("sessionId", sessionId);
+    form.append("activeFiles", JSON.stringify(files.map(fileIdentity)));
+    const filesToUpload = data ? files.filter((file) => !submittedFileKeys.has(fileIdentity(file))) : files;
+    const volumeOnlyUpdate = data && filesToUpload.length > 0 && filesToUpload.every((file) => isLikelyVolumeFile(file));
+    const progressSteps = volumeOnlyUpdate
+      ? [
+          { value: 8, label: "Uploading volume data..." },
+          { value: 38, label: "Reading the volume workbook..." },
+          { value: 68, label: "Aggregating daily units..." },
+          { value: 90, label: "Updating existing dashboard..." }
+        ]
+      : [
+          { value: 8, label: "Uploading files..." },
+          { value: 22, label: "Classifying uploaded workbooks..." },
+          { value: 42, label: "Reading Excel sheets..." },
+          { value: 62, label: "Building employee timelines..." },
+          { value: 78, label: "Calculating KPIs and history..." },
+          { value: 90, label: "Still processing large Excel data..." }
+        ];
+    setProgress(progressSteps[0]);
+    const progressTimers = progressSteps.slice(1).map((step, index) => (
+      setTimeout(() => setProgress(step), [450, 1200, 2200, 3600, 5200][index] || 5200)
+    ));
+    if (volumeOnlyUpdate) form.append("partial", "volume");
+    form.append("fileKeys", JSON.stringify(filesToUpload.map(fileIdentity)));
+    filesToUpload.forEach((file) => form.append("files", file));
     try {
       const res = await fetch(`${API}/api/efficiency/analyze`, { method: "POST", body: form });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Dashboard generation failed");
       setProgress({ value: 100, label: "Dashboard ready." });
-      setData(json);
-      setDate(json.dates[0] || "");
+      if (json.partial === "volume") {
+        setData((current) => mergeEfficiencyVolumeDelta(current, json));
+      } else {
+        setData(json);
+        setDate(json.dates[0] || "");
+      }
+      setSubmittedFileKeys(new Set(files.map(fileIdentity)));
     } catch (e) {
       setError(translateError(e.message));
       setProgress({ value: 100, label: "Failed." });
@@ -149,21 +178,6 @@ function EfficiencyPage() {
   const groups = useMemo(() => ["All Groups", ...new Set(dayRows.map((r) => r.group).filter(Boolean))].sort(), [dayRows]);
   const indirectCategories = useMemo(() => ["All Categories", ...new Set((day?.indirect || []).map((r) => r.操作分类).filter(Boolean))].sort(), [day]);
   const completeness = data?.completeness || {};
-
-  function addEfficiencyFiles(nextFiles) {
-    setFiles((current) => {
-      const merged = [...current];
-      for (const file of nextFiles) {
-        const duplicate = merged.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
-        if (!duplicate) merged.push(file);
-      }
-      return merged;
-    });
-  }
-
-  function removeEfficiencyFile(index) {
-    setFiles((current) => current.filter((_, i) => i !== index));
-  }
 
   return (
     <section className="page">
@@ -206,8 +220,18 @@ function EfficiencyPage() {
           <div className="kpi-grid five">
             <Metric icon={<Boxes />} label="WAREHOUSE" value={day.kpi.warehouse} />
             <Metric icon={<Users />} label="TOTAL WORKERS" value={day.kpi.totalWorkers} />
-            <Metric icon={<Timer />} label="TOTAL ATTENDANCE" value={`${day.kpi.totalAttendance.toFixed(1)}h`} />
-            <Donut ratio={day.kpi.efficiencyRatio} work={day.kpi.totalWork} attendance={day.kpi.totalAttendance} />
+            <Metric
+              icon={<Timer />}
+              label="TOTAL ATTENDANCE"
+              value={`${day.kpi.totalAttendance.toFixed(1)}h`}
+              note={!completeness.attendance ? "不准确，需要上传班次明细表" : ""}
+            />
+            <Donut
+              ratio={day.kpi.efficiencyRatio}
+              work={day.kpi.totalWork}
+              attendance={day.kpi.totalAttendance}
+              note={!completeness.attendance ? "不准确，需要上传班次明细表" : ""}
+            />
             <Metric icon={<Package />} label="TOTAL VOLUME" value={completeness.volume ? `${day.kpi.volume.toLocaleString()} pcs` : "Incomplete: upload Volume Data"} />
           </div>
 
@@ -515,10 +539,10 @@ function SelectedFileList({ files, onRemove }) {
   if (!files.length) return null;
   return (
     <div className="selected-files">
-      {files.map((file, index) => (
-        <div className="selected-file" key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
+      {files.map((file) => (
+        <div className="selected-file" key={fileIdentity(file)}>
           <span>{file.name}</span>
-          <button type="button" onClick={() => onRemove(index)} aria-label={`Remove ${file.name}`}>
+          <button type="button" onClick={() => onRemove(fileIdentity(file))} aria-label={`Remove ${file.name}`}>
             <Trash2 size={15} />
           </button>
         </div>
@@ -527,12 +551,49 @@ function SelectedFileList({ files, onRemove }) {
   );
 }
 
-function Metric({ icon, label, value }) {
+function fileIdentity(file) {
+  return `${file.name}|${file.size ?? 0}|${file.lastModified ?? 0}`;
+}
+
+function mergeFiles(current, nextFiles) {
+  const map = new Map(current.map((file) => [fileIdentity(file), file]));
+  for (const file of nextFiles) {
+    map.set(fileIdentity(file), file);
+  }
+  return [...map.values()];
+}
+
+function isLikelyVolumeFile(file) {
+  return /件量|volume|sales|销售单|order/i.test(file.name || "");
+}
+
+function mergeEfficiencyVolumeDelta(current, delta) {
+  if (!current) return current;
+  const days = { ...current.days };
+  for (const [date, patch] of Object.entries(delta.days || {})) {
+    if (!days[date]) continue;
+    days[date] = {
+      ...days[date],
+      kpi: {
+        ...days[date].kpi,
+        volume: patch.kpi?.volume ?? null
+      }
+    };
+  }
+  return {
+    ...current,
+    completeness: { ...current.completeness, ...delta.completeness },
+    days
+  };
+}
+
+function Metric({ icon, label, value, note = "" }) {
   return (
     <div className="metric">
       {icon && <span className="metric-icon">{icon}</span>}
       <span>{label}</span>
       <strong>{value}</strong>
+      {note && <small>{note}</small>}
     </div>
   );
 }
@@ -551,16 +612,17 @@ function ProgressBar({ value, label }) {
   );
 }
 
-function Donut({ ratio, work, attendance }) {
+function Donut({ ratio, work, attendance, note = "" }) {
   return (
     <div className="metric donut-card">
       <Plot
         data={[{ type: "pie", labels: ["Work", "Idle"], values: [work, Math.max(0, attendance - work)], hole: 0.65, marker: { colors: ["#2563EB", "#D7E3FF"] }, textinfo: "none", hovertemplate: "%{label}: %{percent:.1%} (%{value:.1f}h)<extra></extra>" }]}
-        layout={{ height: 160, margin: { l: 0, r: 0, t: 0, b: 0 }, annotations: [{ text: `${ratio.toFixed(1)}%`, x: 0.5, y: 0.5, showarrow: false, font: { size: 22, color: "#2563EB" } }], showlegend: false }}
+        layout={{ height: note ? 140 : 160, margin: { l: 0, r: 0, t: 0, b: 0 }, annotations: [{ text: `${ratio.toFixed(1)}%`, x: 0.5, y: 0.5, showarrow: false, font: { size: 22, color: "#2563EB" } }], showlegend: false }}
         config={{ displayModeBar: false, responsive: true }}
         useResizeHandler
         style={{ width: "100%" }}
       />
+      {note && <small>{note}</small>}
     </div>
   );
 }
@@ -597,11 +659,13 @@ function filterShift(rows, shift, group) {
 }
 
 function Gantt({ rows, allRows, date, shift, summary, history }) {
-  if (!rows.length) return <div className="empty">No {shift} shift data.</div>;
-  const stats = buildPersonStats(allRows || rows);
-  const names = [...new Set(rows.map((r) => r.name))].sort((a, b) => (summary[b]?.ratio || 0) - (summary[a]?.ratio || 0));
+  const clippedRows = rows.map((row) => clipGanttRowToClock(row, summary)).filter(Boolean);
+  const clippedAllRows = (allRows || rows).map((row) => clipGanttRowToClock(row, summary)).filter(Boolean);
+  if (!clippedRows.length) return <div className="empty">No {shift} shift data.</div>;
+  const stats = buildPersonStats(clippedAllRows);
+  const names = [...new Set(clippedRows.map((r) => r.name))].sort((a, b) => (summary[b]?.ratio || 0) - (summary[a]?.ratio || 0));
   const traces = Object.keys(TYPE_COLORS).map((type) => {
-    const items = rows.filter((r) => r.type === type);
+    const items = clippedRows.filter((r) => r.type === type);
     return {
       type: "bar",
       orientation: "h",
@@ -657,6 +721,41 @@ function Gantt({ rows, allRows, date, shift, summary, history }) {
       style={{ width: "100%" }}
     />
   );
+}
+
+function clipGanttRowToClock(row, summary) {
+  const personSummary = summary?.[row.name];
+  const clockIn = personSummary?.in;
+  const clockOut = personSummary?.out;
+  if (!clockIn || !clockOut || clockIn === "-" || clockOut === "-" || clockIn === "缺失" || clockOut === "缺失") {
+    return row;
+  }
+
+  const start = new Date(row.start);
+  const end = new Date(row.end);
+  const shiftStart = dateWithClock(row.date, clockIn);
+  let shiftEnd = dateWithClock(row.date, clockOut);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || !shiftStart || !shiftEnd) return row;
+  if (shiftEnd <= shiftStart) shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+  if (end <= shiftStart || start >= shiftEnd) return null;
+
+  const clippedStart = start < shiftStart ? shiftStart : start;
+  const clippedEnd = end > shiftEnd ? shiftEnd : end;
+  if (clippedStart >= clippedEnd) return null;
+  return {
+    ...row,
+    start: clippedStart.toISOString(),
+    end: clippedEnd.toISOString(),
+    duration: (clippedEnd - clippedStart) / 3600000
+  };
+}
+
+function dateWithClock(date, clock) {
+  const match = String(clock).match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const [year, month, day] = String(date).split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day, Number(match[1]), Number(match[2]), Number(match[3] || 0));
 }
 
 function buildPersonStats(rows) {

@@ -332,6 +332,13 @@ main {
   overflow-wrap: anywhere;
 }
 
+.metric small {
+  margin-top: 8px;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .metric-icon svg {
   width: 20px;
   height: 20px;
@@ -342,6 +349,12 @@ main {
 .donut-card {
   padding: 0;
   overflow: hidden;
+}
+
+.donut-card small {
+  display: block;
+  padding: 0 12px 12px;
+  text-align: center;
 }
 
 .toolbar,

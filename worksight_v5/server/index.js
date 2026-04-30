@@ -56,6 +56,15 @@ function colAt(row, idx) {
   return row?.[keys[idx]] ?? null;
 }
 
+function headerIndex(headers, names) {
+  const normalized = headers.map((header) => String(header ?? "").trim());
+  for (const name of names) {
+    const index = normalized.indexOf(name);
+    if (index >= 0) return index;
+  }
+  return -1;
+}
+
 function firstPresentColumn(rows, candidates) {
   const available = new Set(cols(rows));
   return candidates.find((column) => available.has(column)) || null;
@@ -219,10 +228,9 @@ function classifyFile(file) {
   }
 }
 
-function loadData(taskFile, attendanceFile) {
-  const df1 = sheetRows(taskFile);
+function loadAttendanceData(attendanceFile) {
   const df2Raw = attendanceFile ? sheetRows(attendanceFile) : [];
-  const df2 = df2Raw.map((r) => {
+  return df2Raw.map((r) => {
     const employee_no = String(colAt(r, 1) ?? "").trim();
     return {
       ...r,
@@ -234,11 +242,22 @@ function loadData(taskFile, attendanceFile) {
       attendance_group: String(colAt(r, 26) ?? "未分组").trim() || "未分组"
     };
   });
+}
 
+function applyAttendanceNames(df, df2) {
   const nameMap = new Map(df2.map((r) => [r.employee_no, r.real_name]));
-  const groupMap = new Map(df2.map((r) => [r.employee_no, r.attendance_group]));
+  return df.map((row) => ({
+    ...row,
+    display_name: row.employee_no
+      ? (nameMap.has(row.employee_no) ? `${nameMap.get(row.employee_no)} (${row.employee_no})` : row.employee_no)
+      : String(row.operator ?? "Unknown")
+  }));
+}
 
-  const df = df1.map((r) => {
+function loadTaskData(taskFile, df2 = []) {
+  const df1 = sheetRows(taskFile);
+  const nameMap = new Map(df2.map((r) => [r.employee_no, r.real_name]));
+  return df1.map((r) => {
     let start = parseDate(val(r, "任务单开始时间"));
     let end = parseDate(val(r, "任务单结束时间"));
     if (start && end && start.getHours() < 6) {
@@ -261,6 +280,12 @@ function loadData(taskFile, attendanceFile) {
       work_date: adjustWorkDate(start)
     };
   });
+}
+
+function loadData(taskFile, attendanceFile) {
+  const df2 = loadAttendanceData(attendanceFile);
+  const groupMap = new Map(df2.map((r) => [r.employee_no, r.attendance_group]));
+  const df = loadTaskData(taskFile, df2);
   return { df, df2, groupMap };
 }
 
@@ -287,12 +312,48 @@ function buildIscOnlyTimeline(df) {
 
 function loadVolumeData(file) {
   if (!file) return {};
-  const rows = sheetRows(file);
-  const cleaned = rows
-    .map((r) => ({ date: parseDate(val(r, "打包完成时间")), cancel: val(r, "是否取消"), units: num(colAt(r, 6), 0) }))
-    .filter((r) => r.date && !String(r.cancel ?? "").includes("是"));
+  const wb = XLSX.read(file.buffer, { type: "buffer", cellDates: true, dense: true, sheets: 0 });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return {};
+
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  const cellValue = (rowIndex, colIndex) => {
+    const cell = Array.isArray(ws) ? ws[rowIndex]?.[colIndex] : ws[XLSX.utils.encode_cell({ r: rowIndex, c: colIndex })];
+    return cell && typeof cell === "object" && "v" in cell ? cell.v : cell;
+  };
+  const rowValues = (rowIndex) => {
+    const row = [];
+    for (let c = range.s.c; c <= range.e.c; c++) row.push(cellValue(rowIndex, c));
+    return row;
+  };
+
+  let headerRow = null;
+  let headerRowIndex = -1;
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const values = rowValues(r);
+    if (values.some((cell) => String(cell ?? "").trim() === "打包完成时间")) {
+      headerRow = values;
+      headerRowIndex = r;
+      break;
+    }
+  }
+  if (!headerRow) return {};
+  const dateIdx = headerIndex(headerRow, ["打包完成时间"]);
+  const unitIdx = headerIndex(headerRow, ["件数", "实际件数"]);
+  const cancelIdx = headerIndex(headerRow, ["是否取消"]);
+  if (dateIdx < 0 || unitIdx < 0) return {};
+  const dateCol = range.s.c + dateIdx;
+  const unitCol = range.s.c + unitIdx;
+  const cancelCol = cancelIdx >= 0 ? range.s.c + cancelIdx : -1;
   const out = {};
-  for (const [d, items] of groupBy(cleaned, (r) => dayKey(r.date))) out[d] = sum(items, (r) => r.units);
+
+  for (let i = headerRowIndex + 1; i <= range.e.r; i++) {
+    if (cancelCol >= 0 && String(cellValue(i, cancelCol) ?? "").trim() === "是") continue;
+    const date = parseDate(cellValue(i, dateCol));
+    if (!date) continue;
+    const key = dayKey(date);
+    out[key] = (out[key] || 0) + num(cellValue(i, unitCol), 0);
+  }
   return out;
 }
 
@@ -351,6 +412,16 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
   const records = [];
   const processed = new Set();
 
+  function clipToShift(item, workStart, workEnd) {
+    const start = parseDate(item.start);
+    const end = parseDate(item.end);
+    if (!start || !end || end <= workStart || start >= workEnd) return null;
+    const clippedStart = start < workStart ? workStart : start;
+    const clippedEnd = end > workEnd ? workEnd : end;
+    if (clippedStart >= clippedEnd) return null;
+    return { ...item, start: clippedStart, end: clippedEnd };
+  }
+
   function getIscTime(empNo, day) {
     const rows = df.filter((r) => String(r.employee_no) === String(empNo) && r.work_date === day);
     return { start: minDate(rows, (r) => r.上班时间), end: maxDate(rows, (r) => r.下班时间) };
@@ -372,11 +443,13 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
     const shiftName = String(row.班次名称 || "");
     const shift = shiftName.includes("早") || shiftName.includes("白") ? "morning" : (shiftName.includes("晚") ? "evening" : (workStart.getHours() < 15 ? "morning" : "evening"));
     let tasks = df
-      .filter((r) => String(r.employee_no) === empNo && r.work_date === day && r.start && r.end && r.start < workEnd)
-      .map((r) => ({ ...r, start: r.start < workStart ? workStart : r.start, type: "work", employee_no: empNo }));
+      .filter((r) => String(r.employee_no) === empNo && r.work_date === day)
+      .map((r) => clipToShift({ ...r, type: "work", employee_no: empNo }, workStart, workEnd))
+      .filter(Boolean);
     tasks.push(...breaks
-      .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day && b.end > workStart && b.start < workEnd)
-      .map((b) => ({ ...b, employee_no: empNo, start: b.start < workStart ? workStart : b.start, end: b.end > workEnd ? workEnd : b.end })));
+      .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day)
+      .map((b) => clipToShift({ ...b, employee_no: empNo }, workStart, workEnd))
+      .filter(Boolean));
     tasks = tasks.sort((a, b) => a.start - b.start);
     let cursor = workStart;
     for (const t of tasks) {
@@ -401,10 +474,13 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
       if (!workStart || !workEnd) continue;
       const shiftName = String(items[0].班次名称 || "");
       const shift = shiftName.includes("早") || shiftName.includes("白") ? "morning" : (shiftName.includes("晚") ? "evening" : (workStart.getHours() < 15 ? "morning" : "evening"));
-      let tasks = items.filter((r) => r.start && r.end && r.start < workEnd).map((r) => ({ ...r, start: r.start < workStart ? workStart : r.start, type: "work" }));
+      let tasks = items
+        .map((r) => clipToShift({ ...r, type: "work" }, workStart, workEnd))
+        .filter(Boolean);
       tasks.push(...breaks
-        .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day && String(b.group).trim() === groupName && b.end > workStart && b.start < workEnd)
-        .map((b) => ({ ...b, start: b.start < workStart ? workStart : b.start, end: b.end > workEnd ? workEnd : b.end })));
+        .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day && String(b.group).trim() === groupName)
+        .map((b) => clipToShift(b, workStart, workEnd))
+        .filter(Boolean));
       tasks = tasks.sort((a, b) => a.start - b.start);
       let cursor = workStart;
       for (const t of tasks) {
@@ -530,28 +606,117 @@ function serialize(row) {
   return out;
 }
 
-function analyzeEfficiency(files) {
-  let taskFile, attendanceFile, volumeFile, punchFile;
-  for (const f of files) {
-    const type = classifyFile(f);
-    if (type === "task") taskFile = f;
-    if (type === "attendance") attendanceFile = f;
-    if (type === "volume") volumeFile = f;
-    if (type === "punch") punchFile = f;
+const efficiencySessions = new Map();
+
+function getEfficiencySession(sessionId) {
+  const key = sessionId || "default";
+  if (!efficiencySessions.has(key)) efficiencySessions.set(key, {});
+  return efficiencySessions.get(key);
+}
+
+function pruneEfficiencySession(cache, activeIds = []) {
+  if (!activeIds.length) return;
+  for (const key of ["task", "attendance", "volume", "punch"]) {
+    if (cache[key]?.identity && !activeIds.includes(cache[key].identity)) delete cache[key];
   }
-  if (!taskFile) throw new Error("缺少任务单明细（df1）");
-  const { df, df2, groupMap } = loadData(taskFile, attendanceFile);
-  const volumeData = loadVolumeData(volumeFile);
-  const breakDf = loadBreakData(punchFile);
-  const indirectDf = loadIndirectData(taskFile);
-  const timeline = attendanceFile ? buildTimeline(df, df2, groupMap, breakDf) : buildIscOnlyTimeline(df);
+}
+
+function efficiencyTimelineKey(cache) {
+  return [
+    cache.task?.identity || "",
+    cache.attendance?.identity || "",
+    cache.punch?.identity || ""
+  ].join("::");
+}
+
+function buildEfficiencyResponse(cache, { delta = false } = {}) {
+  const volumeData = cache.volume?.volumeData || {};
+  const base = cache.analysis;
+  const completeness = {
+    attendance: Boolean(cache.attendance),
+    volume: Boolean(cache.volume),
+    punch: Boolean(cache.punch)
+  };
+  const days = {};
+
+  for (const date of base.dates) {
+    const baseDay = base.days[date];
+    days[date] = {
+      ...baseDay,
+      kpi: {
+        ...baseDay.kpi,
+        volume: cache.volume ? Math.round(volumeData[date] || 0) : null
+      }
+    };
+  }
+
+  if (delta) {
+    return {
+      partial: "volume",
+      days: Object.fromEntries(Object.entries(days).map(([date, day]) => [date, { kpi: { volume: day.kpi.volume } }])),
+      completeness
+    };
+  }
+
+  return {
+    dates: base.dates,
+    currentWarehouse: base.currentWarehouse,
+    timeline: base.timeline,
+    days,
+    history_ratios: base.history_ratios,
+    completeness,
+    groups: base.groups
+  };
+}
+
+function analyzeEfficiency(files, { sessionId = "default", activeFiles = [], fileKeys = [], partial = "" } = {}) {
+  const cache = getEfficiencySession(sessionId);
+  pruneEfficiencySession(cache, activeFiles);
+
+  files.forEach((f, index) => {
+    const identity = fileKeys[index] || `${f.originalname}|${f.size || 0}`;
+    const type = classifyFile(f);
+    if (type === "task" && cache.task?.identity !== identity) {
+      const df = loadTaskData(f, cache.attendance?.df2 || []);
+      cache.task = { identity, df, indirectDf: loadIndirectData(f) };
+    }
+    if (type === "attendance" && cache.attendance?.identity !== identity) {
+      const df2 = loadAttendanceData(f);
+      cache.attendance = {
+        identity,
+        df2,
+        groupMap: new Map(df2.map((r) => [r.employee_no, r.attendance_group]))
+      };
+    }
+    if (type === "volume" && cache.volume?.identity !== identity) {
+      cache.volume = { identity, volumeData: loadVolumeData(f) };
+    }
+    if (type === "punch" && cache.punch?.identity !== identity) {
+      cache.punch = { identity, breakDf: loadBreakData(f) };
+    }
+  });
+
+  if (!cache.task) throw new Error("缺少任务单明细（df1）");
+
+  const df2 = cache.attendance?.df2 || [];
+  const groupMap = cache.attendance?.groupMap || new Map();
+  const df = cache.attendance ? applyAttendanceNames(cache.task.df, df2) : cache.task.df;
+  const volumeData = cache.volume?.volumeData || {};
+  const breakDf = cache.punch?.breakDf || [];
+  const indirectDf = cache.task.indirectDf || [];
+  const timelineKey = efficiencyTimelineKey(cache);
+  if (cache.analysis?.timelineKey === timelineKey) {
+    return buildEfficiencyResponse(cache, { delta: partial === "volume" });
+  }
+
+  const timeline = cache.attendance ? buildTimeline(df, df2, groupMap, breakDf) : buildIscOnlyTimeline(df);
   const { history_ratios, history_wait } = buildHistory(timeline);
   const currentWarehouse = mostCommon(df.map((r) => extractWarehouse(r.warehouse_name)));
   const dates = [...new Set(timeline.map((r) => r.date))].sort();
   const completeness = {
-    attendance: Boolean(attendanceFile),
-    volume: Boolean(volumeFile),
-    punch: Boolean(punchFile)
+    attendance: Boolean(cache.attendance),
+    volume: Boolean(cache.volume),
+    punch: Boolean(cache.punch)
   };
   const days = {};
   for (const date of dates) {
@@ -566,7 +731,7 @@ function analyzeEfficiency(files) {
         totalAttendance,
         totalWork,
         efficiencyRatio: totalAttendance > 0 ? (totalWork / totalAttendance) * 100 : 0,
-        volume: volumeFile ? Math.round(volumeData[date] || 0) : null
+        volume: cache.volume ? Math.round(volumeData[date] || 0) : null
       },
       summary,
       firstAction: buildFirstActionTable(dfDay, df, df2, date, history_wait),
@@ -574,7 +739,8 @@ function analyzeEfficiency(files) {
       indirect: indirectDf.filter((r) => r.work_date === date).map(serialize)
     };
   }
-  return {
+  cache.analysis = {
+    timelineKey,
     dates,
     currentWarehouse,
     timeline: timeline.map(serialize),
@@ -583,6 +749,7 @@ function analyzeEfficiency(files) {
     completeness,
     groups: [...new Set(timeline.map((r) => r.group).filter(Boolean))].sort()
   };
+  return buildEfficiencyResponse(cache);
 }
 
 function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
@@ -737,7 +904,6 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
     const [日期, 工号] = key.split("|");
     const 件数 = qtyMap.get(key) || 0;
     const 总件数 = rawMap.get(key) || 0;
-<<<<<<< HEAD
     const hasAttendance = attMap.has(key);
     const 考勤时长 = hasAttendance ? attMap.get(key) || 0 : "";
     const rawEffectiveHours = timeMap.get(key) || 0;
@@ -758,15 +924,6 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
       总效率,
       低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : ""
     };
-=======
-    const 考勤时长 = iscFile ? (attMap.get(key) || 0) : "";
-    const rawEffectiveHours = timeMap.get(key) || 0;
-    const effectiveCap = 考勤时长 ? Math.min(考勤时长, 8) : 8;
-    const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
-    const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
-    const 总效率 = 有效工时 ? 总件数 / 有效工时 : 0;
-    return { 日期, 工号, 姓名: nameMap.get(工号) || "", 总件数, 件数, 有效工时, 考勤时长, 有效工时占比: 考勤时长 ? 有效工时 / 考勤时长 : "", 拣非爆品效率, 总效率, 低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : "" };
->>>>>>> f1087cb6b5064aad7f21f052a7b8d82876c1b1c8
   }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
 }
 
@@ -774,7 +931,14 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/api/efficiency/analyze", upload.array("files"), (req, res) => {
   try {
-    res.json(analyzeEfficiency(req.files || []));
+    const activeFiles = JSON.parse(req.body?.activeFiles || "[]");
+    const fileKeys = JSON.parse(req.body?.fileKeys || "[]");
+    res.json(analyzeEfficiency(req.files || [], {
+      sessionId: req.body?.sessionId || "default",
+      activeFiles,
+      fileKeys,
+      partial: req.body?.partial || ""
+    }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }
