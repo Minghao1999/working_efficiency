@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Plot from "react-plotly.js";
-import { BarChart3, Boxes, Download, FileSpreadsheet, Package, Timer, Users } from "lucide-react";
+import { BarChart3, Boxes, Download, FileSpreadsheet, Package, RotateCcw, Timer, Trash2, Users } from "lucide-react";
 import "./styles.css";
 
 const API = "http://127.0.0.1:3001";
@@ -58,15 +58,9 @@ function App() {
         <button className={page === "weekly" ? "nav active" : "nav"} onClick={() => setPage("weekly")}>Order / Unit Analysis</button>
       </aside>
       <main>
-        <div className="page-view" hidden={page !== "home"}>
-          <Home onNavigate={setPage} />
-        </div>
-        <div className="page-view" hidden={page !== "efficiency"}>
-          <EfficiencyPage />
-        </div>
-        <div className="page-view" hidden={page !== "weekly"}>
-          <WeeklyPage />
-        </div>
+        {page === "home" && <Home onNavigate={setPage} />}
+        {page === "efficiency" && <EfficiencyPage />}
+        {page === "weekly" && <WeeklyPage />}
       </main>
     </div>
   );
@@ -150,11 +144,26 @@ function EfficiencyPage() {
   const indirectCategories = useMemo(() => ["All Categories", ...new Set((day?.indirect || []).map((r) => r.操作分类).filter(Boolean))].sort(), [day]);
   const completeness = data?.completeness || {};
 
+  function addEfficiencyFiles(nextFiles) {
+    setFiles((current) => {
+      const merged = [...current];
+      for (const file of nextFiles) {
+        const duplicate = merged.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (!duplicate) merged.push(file);
+      }
+      return merged;
+    });
+  }
+
+  function removeEfficiencyFile(index) {
+    setFiles((current) => current.filter((_, i) => i !== index));
+  }
+
   return (
     <section className="page">
       <header className="page-head">
         <h1>Efficiency Dashboard</h1>
-        <p>Advanced productivity analytics dashboard for ISC, iAMS, volume, and punch data</p>
+        <p>Advanced productivity analytics dashboard for ISC, iAMS, and iWMS</p>
       </header>
 
       <div className="panel">
@@ -168,8 +177,7 @@ function EfficiencyPage() {
           <div>📦 Volume Data：来自 iWMS销售单综合查询（打包完成时间 & 件数） · Optional</div>
           <div>🧾 Punch Data：来自 iAMS打卡流水（进出仓记录） · Optional</div>
         </div>
-        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={addEfficiencyFiles} />
-        <SelectedFiles files={files} onRemove={removeEfficiencyFile} />
+        <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={setFiles} />
         <button className="primary-btn" disabled={loading || !files.length} onClick={submit}>
           {loading ? "Generating..." : "Generate Dashboard"}
         </button>
@@ -241,12 +249,17 @@ function WeeklyPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [personDate, setPersonDate] = useState("");
+  const [personName, setPersonName] = useState("All People");
   const [deleted, setDeleted] = useState(new Set());
   const [markedForDelete, setMarkedForDelete] = useState(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [manualHours, setManualHours] = useState({});
+  const requestSeq = useRef(0);
 
   useEffect(() => {
-    if (!volume) {
+    const seq = ++requestSeq.current;
+    const hasAnyUpload = Boolean(volume || pick || (laborMode === "excel" && isc));
+    if (!hasAnyUpload) {
       setData(null);
       setError("");
       setLoading(false);
@@ -258,7 +271,7 @@ function WeeklyPage() {
       setError("");
       setLoading(true);
       const form = new FormData();
-      form.append("volume", volume);
+      if (volume) form.append("volume", volume);
       if (laborMode === "excel" && isc) form.append("isc", isc);
       if (pick) form.append("pick", pick);
 
@@ -269,16 +282,18 @@ function WeeklyPage() {
           signal: controller.signal
         });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Analysis failed");
+        if (!res.ok) throw json;
+        if (seq !== requestSeq.current) return;
         setData(json);
-        const firstDate = [...new Set((json.personEfficiency || []).map((r) => r.日期))][0] || "";
+        const firstDate = [...new Set((json.personEfficiency || []).map((r) => r.日期).filter(Boolean))][0] || "";
         setPersonDate(firstDate);
+        setPersonName("All People");
         setDeleted(new Set());
         setMarkedForDelete(new Set());
       } catch (e) {
-        if (e.name !== "AbortError") setError(translateError(e.message));
+        if (e.name !== "AbortError" && seq === requestSeq.current) setError(formatUploadError(e));
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted && seq === requestSeq.current) setLoading(false);
       }
     }, 250);
 
@@ -294,17 +309,40 @@ function WeeklyPage() {
     }
   }, [laborMode]);
 
-  const personDates = [...new Set((data?.personEfficiency || []).map((r) => r.日期))].sort();
-  const personRows = (data?.personEfficiency || [])
-    .filter((r) => r.日期 === personDate)
+  const activePersonEfficiency = (data?.personEfficiency || []).filter((r) => !deleted.has(personDeleteKey(r)));
+  const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
+  const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
+  const selectedPersonDate = personDate || personDates[0] || "";
+  const personRows = activePersonEfficiency
+    .filter((r) => !selectedPersonDate || r.日期 === selectedPersonDate)
+    .filter((r) => personName === "All People" || r.姓名 === personName)
     .map((r) => {
       const id = `${r.日期}|${r.工号}`;
       const { 低于目标, ...row } = r;
-      return { ...row, 删除: markedForDelete.has(id), _deleted: deleted.has(id) };
+      return { ...row, 删除: markedForDelete.has(id) };
     });
 
   function applyDeleteSort() {
-    setDeleted(new Set(markedForDelete));
+    if (!markedForDelete.size) return;
+    setDeleteConfirmOpen(true);
+  }
+
+  function confirmDeletePeople() {
+    const rowsById = new Map((data?.personEfficiency || []).map((row) => [`${row.日期}|${row.工号}`, row]));
+    const nextDeleted = new Set(deleted);
+    for (const id of markedForDelete) {
+      const row = rowsById.get(id);
+      if (row) nextDeleted.add(personDeleteKey(row));
+    }
+    setDeleted(nextDeleted);
+    setMarkedForDelete(new Set());
+    setDeleteConfirmOpen(false);
+    if (personName !== "All People" && [...nextDeleted].includes(personName)) setPersonName("All People");
+  }
+
+  function restoreDeletedPeople() {
+    setDeleted(new Set());
+    setMarkedForDelete(new Set());
   }
 
   const dailyRows = useMemo(() => {
@@ -362,19 +400,34 @@ function WeeklyPage() {
             />
           </div>
 
-          {!!personDates.length && (
+          {!!activePersonEfficiency.length && (
             <div className="panel">
               <div className="table-head">
                 <h2>Per-Person Daily Picking Efficiency</h2>
-                <button className="ghost-btn" onClick={applyDeleteSort}>Apply Delete</button>
+                <div className="button-row">
+                  <button className="ghost-btn" disabled={!deleted.size} onClick={restoreDeletedPeople} title="Restore deleted people"><RotateCcw size={16} /> Refresh</button>
+                  <button className="ghost-btn" disabled={!markedForDelete.size} onClick={applyDeleteSort}>Apply Delete</button>
+                </div>
               </div>
-              <SelectLine label="Select Date" value={personDate} options={personDates} onChange={setPersonDate} />
+              <div className="filter-row">
+                <SelectLine label="Select Date" value={selectedPersonDate} options={personDates} onChange={setPersonDate} />
+                <SelectLine label="Filter Person" value={personName} options={personNames} onChange={setPersonName} />
+              </div>
+              {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
               <EditablePersonTable
                 rows={personRows}
                 markedForDelete={markedForDelete}
                 setMarkedForDelete={setMarkedForDelete}
               />
             </div>
+          )}
+          {deleteConfirmOpen && (
+            <ConfirmDialog
+              title="Delete selected people?"
+              message={`This will remove ${markedForDelete.size} selected row${markedForDelete.size === 1 ? "" : "s"} from the table and remove those people from the filter.`}
+              onCancel={() => setDeleteConfirmOpen(false)}
+              onConfirm={confirmDeletePeople}
+            />
           )}
         </>
       )}
@@ -403,6 +456,12 @@ function UploadBox({ title, caption, disabled = false, onChange }) {
 }
 
 function LaborHoursInput({ mode, setMode, onFileChange }) {
+  const [fileName, setFileName] = useState("");
+
+  useEffect(() => {
+    if (mode === "manual") setFileName("");
+  }, [mode]);
+
   return (
     <div className="upload-box">
       <strong>Labor Hours</strong>
@@ -412,7 +471,15 @@ function LaborHoursInput({ mode, setMode, onFileChange }) {
         <button type="button" className={mode === "manual" ? "active" : ""} onClick={() => setMode("manual")}>Manual Entry</button>
       </div>
       {mode === "excel" ? (
-        <FilePicker accept=".xlsx,.xls" files={[]} onChange={(files) => onFileChange(files[0] || null)} />
+        <FilePicker
+          accept=".xlsx,.xls"
+          files={fileName ? [{ name: fileName }] : []}
+          onChange={(files) => {
+            const file = files[0] || null;
+            setFileName(file?.name || "");
+            onFileChange(file);
+          }}
+        />
       ) : (
         <div className="hint-line">Enter Total Hours directly in the Daily Detail table.</div>
       )}
@@ -435,35 +502,6 @@ function FilePicker({ multiple = false, accept, disabled = false, files = [], on
       <em>{label}</em>
     </label>
   );
-}
-
-function SelectedFiles({ files, onRemove }) {
-  if (!files.length) return null;
-  return (
-    <div className="selected-files">
-      {files.map((file) => {
-        const key = fileIdentity(file);
-        return (
-          <div className="selected-file" key={key}>
-            <span>{file.name}</span>
-            <button type="button" onClick={() => onRemove(key)}>Remove</button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function fileIdentity(file) {
-  return `${file.name}|${file.size ?? 0}|${file.lastModified ?? 0}`;
-}
-
-function mergeFiles(current, nextFiles) {
-  const map = new Map(current.map((file) => [fileIdentity(file), file]));
-  for (const file of nextFiles) {
-    map.set(fileIdentity(file), file);
-  }
-  return [...map.values()];
 }
 
 function Metric({ icon, label, value }) {
@@ -514,6 +552,21 @@ function ChartPanel({ title, caption, children }) {
 
 function SelectLine({ label, value, options, onChange }) {
   return <label className="select-line">{label}<select value={value} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></label>;
+}
+
+function ConfirmDialog({ title, message, onCancel, onConfirm }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h2 id="confirm-title">{title}</h2>
+        <p>{message}</p>
+        <div className="modal-actions">
+          <button className="ghost-btn" onClick={onCancel}>Cancel</button>
+          <button className="danger-btn" onClick={onConfirm}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function filterShift(rows, shift, group) {
@@ -602,6 +655,64 @@ function IndirectChart({ rows }) {
     return { type: "bar", orientation: "h", name: cat, y: items.map((r) => r.employee_no), x: items.map((r) => new Date(r.结束时间) - new Date(r.开始时间)), base: items.map((r) => new Date(r.开始时间)), marker: { color: palette(idx) } };
   });
   return <Plot data={traces} layout={{ barmode: "stack", height: Math.max(450, new Set(rows.map((r) => r.employee_no)).size * 32), margin: { l: 25, r: 60, t: 20, b: 35 }, yaxis: { autorange: "reversed" }, xaxis: { title: "Time", type: "date" }, plot_bgcolor: "white", paper_bgcolor: "white" }} config={{ responsive: true }} useResizeHandler style={{ width: "100%" }} />;
+}
+
+function PersonEfficiencyChart({ rows, personName }) {
+  const chartRows = (rows || [])
+    .filter((row) => row.姓名 === personName)
+    .sort((a, b) => String(a.日期).localeCompare(String(b.日期)));
+  if (!chartRows.length) return null;
+  const x = chartRows.map((row) => row.日期);
+  const traces = [
+    {
+      type: "scatter",
+      mode: "lines+markers",
+      name: "Non-Burst Picking Efficiency",
+      x,
+      y: chartRows.map((row) => Number(row.拣非爆品效率) || 0),
+      line: { color: "#2563eb", width: 3 },
+      marker: { size: 8 }
+    },
+    {
+      type: "scatter",
+      mode: "lines+markers",
+      name: "Total Efficiency",
+      x,
+      y: chartRows.map((row) => Number(row.总效率) || 0),
+      line: { color: "#16a34a", width: 2 },
+      marker: { size: 7 }
+    },
+    {
+      type: "scatter",
+      mode: "lines+markers",
+      name: "Effective Hours",
+      x,
+      y: chartRows.map((row) => Number(row.有效工时) || 0),
+      yaxis: "y2",
+      line: { color: "#f59e0b", width: 2 },
+      marker: { size: 7 }
+    }
+  ];
+  return (
+    <div className="chart-strip">
+      <Plot
+        data={traces}
+        layout={{
+          height: 320,
+          margin: { l: 56, r: 24, t: 18, b: 46 },
+          plot_bgcolor: "white",
+          paper_bgcolor: "white",
+          xaxis: { title: "Date", type: "category" },
+          yaxis: { title: "Efficiency", rangemode: "tozero" },
+          yaxis2: { title: "Effective Hours", overlaying: "y", side: "right", rangemode: "tozero" },
+          legend: { orientation: "h", x: 0, y: 1.12 }
+        }}
+        config={{ responsive: true, displayModeBar: false }}
+        useResizeHandler
+        style={{ width: "100%" }}
+      />
+    </div>
+  );
 }
 
 function DataTable({ rows, lowUpph, highlightWait }) {
@@ -745,6 +856,10 @@ function compareValues(a, b) {
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
+function personDeleteKey(row) {
+  return row?.姓名 || row?.工号 || "";
+}
+
 async function exportRows(rows, sheetName, fileName) {
   const res = await fetch(`${API}/api/export`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows, sheetName, fileName }) });
   const blob = await res.blob();
@@ -777,6 +892,20 @@ function translateError(message) {
     .replace("请上传销售单综合数据", "Please upload the sales order file")
     .replace("缺少字段", "Missing fields")
     .replace("找不到 sheet", "Sheet not found");
+}
+
+function formatUploadError(error) {
+  if (error?.details?.length) {
+    return error.details.map((item) => {
+      const file = item.file ? ` (${item.file})` : "";
+      const sheet = item.sheet ? `Sheet: ${item.sheet}` : "";
+      const missingSheets = item.missingSheets?.length ? `Missing sheets: ${item.missingSheets.join(", ")}` : "";
+      const missingColumns = item.missingColumns?.length ? `Missing columns: ${item.missingColumns.join(", ")}` : "";
+      const missingColumnGroups = item.missingColumnGroups?.length ? `Missing one of: ${item.missingColumnGroups.map((group) => group.join(" / ")).join("; ")}` : "";
+      return [item.label + file, sheet, missingSheets, missingColumns, missingColumnGroups].filter(Boolean).join(" - ");
+    }).join("\n");
+  }
+  return translateError(error?.error || error?.message || "Analysis failed");
 }
 
 function timeOf(v) {
