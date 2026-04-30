@@ -1,5 +1,5 @@
 import React from "react";
-import { Package, Users } from "lucide-react";
+import { FileSpreadsheet, Package, Users } from "lucide-react";
 
 export function Home({ onNavigate }) {
   return (
@@ -18,6 +18,11 @@ export function Home({ onNavigate }) {
           <Package size={32} />
           <h2>Order / Unit Analysis</h2>
           <p>Summarize daily order and unit trends with Excel export</p>
+        </button>
+        <button className="feature-tile" onClick={() => onNavigate("miniApps")}>
+          <FileSpreadsheet size={32} />
+          <h2>Mini Programs</h2>
+          <p>Open small tools for warehouse operations</p>
         </button>
       </div>
     </section>

@@ -20,6 +20,7 @@ import {
   val,
   warehouseValue
 } from "../utils/helpers.js";
+import { summarizeCompletedVolume } from "./volumeService.js";
 
 function loadAttendanceData(attendanceFile) {
   const df2Raw = attendanceFile ? sheetRows(attendanceFile) : [];
@@ -53,10 +54,6 @@ function loadTaskData(taskFile, df2 = []) {
   return df1.map((r) => {
     let start = parseDate(val(r, "任务单开始时间"));
     let end = parseDate(val(r, "任务单结束时间"));
-    if (start && end && start.getHours() < 6) {
-      start = addDays(start, 1);
-      end = addDays(end, 1);
-    }
     const employee_no = String(val(r, "employee_no") ?? "").trim() || null;
     const display_name = employee_no
       ? (nameMap.has(employee_no) ? `${nameMap.get(employee_no)} (${employee_no})` : employee_no)
@@ -104,50 +101,7 @@ function buildIscOnlyTimeline(df) {
 }
 
 function loadVolumeData(file) {
-  if (!file) return {};
-  const wb = XLSX.read(file.buffer, { type: "buffer", cellDates: true, dense: true, sheets: 0 });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  if (!ws) return {};
-
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
-  const cellValue = (rowIndex, colIndex) => {
-    const cell = Array.isArray(ws) ? ws[rowIndex]?.[colIndex] : ws[XLSX.utils.encode_cell({ r: rowIndex, c: colIndex })];
-    return cell && typeof cell === "object" && "v" in cell ? cell.v : cell;
-  };
-  const rowValues = (rowIndex) => {
-    const row = [];
-    for (let c = range.s.c; c <= range.e.c; c++) row.push(cellValue(rowIndex, c));
-    return row;
-  };
-
-  let headerRow = null;
-  let headerRowIndex = -1;
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const values = rowValues(r);
-    if (values.some((cell) => String(cell ?? "").trim() === "打包完成时间")) {
-      headerRow = values;
-      headerRowIndex = r;
-      break;
-    }
-  }
-  if (!headerRow) return {};
-  const dateIdx = headerIndex(headerRow, ["打包完成时间"]);
-  const unitIdx = headerIndex(headerRow, ["件数", "实际件数"]);
-  const cancelIdx = headerIndex(headerRow, ["是否取消"]);
-  if (dateIdx < 0 || unitIdx < 0) return {};
-  const dateCol = range.s.c + dateIdx;
-  const unitCol = range.s.c + unitIdx;
-  const cancelCol = cancelIdx >= 0 ? range.s.c + cancelIdx : -1;
-  const out = {};
-
-  for (let i = headerRowIndex + 1; i <= range.e.r; i++) {
-    if (cancelCol >= 0 && String(cellValue(i, cancelCol) ?? "").trim() === "是") continue;
-    const date = parseDate(cellValue(i, dateCol));
-    if (!date) continue;
-    const key = dayKey(date);
-    out[key] = (out[key] || 0) + num(cellValue(i, unitCol), 0);
-  }
-  return out;
+  return summarizeCompletedVolume(file).unitsByDate;
 }
 
 function loadBreakData(file) {

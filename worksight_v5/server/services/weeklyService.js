@@ -1,6 +1,5 @@
 import {
   TARGET_MAP,
-  businessDate,
   dayKey,
   extractWarehouse,
   firstPresentColumn,
@@ -13,23 +12,15 @@ import {
   validateRows,
   workbook
 } from "../utils/helpers.js";
+import { summarizeCompletedVolume } from "./volumeService.js";
 
 export function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
   const daily = [];
   const volumeDates = [];
   if (volumeFile) {
-    const volumeWb = workbook(volumeFile);
-    const rows = validateRows({
-      file: volumeFile,
-      wb: volumeWb,
-      label: "Upload Unit Data",
-      requiredColumns: ["打包完成时间", "件数", "京东订单号", "状态"]
-    });
-    const filtered = rows
-      .map((r) => ({ ...r, 打包完成时间: parseDate(val(r, "打包完成时间")), 件数: num(val(r, "件数"), 0) }))
-      .filter((r) => r.打包完成时间 && val(r, "状态") === "交接完成" && val(r, "是否取消") !== "是");
-    for (const [date, items] of groupBy(filtered, (r) => businessDate(r.打包完成时间))) {
-      daily.push({ 业务日期: date, 单量: new Set(items.map((r) => val(r, "京东订单号"))).size, 件量: sum(items, (r) => r.件数) });
+    const { unitsByDate, ordersByDate } = summarizeCompletedVolume(volumeFile);
+    for (const [date, units] of Object.entries(unitsByDate)) {
+      daily.push({ 业务日期: date, 单量: ordersByDate[date] || 0, 件量: units });
       volumeDates.push(date);
     }
   }
