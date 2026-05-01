@@ -1,9 +1,11 @@
 import XLSX from "xlsx";
 import { dayKey, headerIndex, num, parseDate } from "../utils/helpers.js";
 
-export function summarizeCompletedVolume(file) {
+export function summarizeCompletedVolume(file, workbook = null) {
   if (!file) return { unitsByDate: {}, ordersByDate: {} };
-  const wb = XLSX.read(file.buffer, { type: "buffer", cellDates: true, dense: true, sheets: 0 });
+  const wb = workbook || (file.path
+    ? XLSX.readFile(file.path, { cellDates: true, dense: true, sheets: 0 })
+    : XLSX.read(file.buffer, { type: "buffer", cellDates: true, dense: true, sheets: 0 }));
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return { unitsByDate: {}, ordersByDate: {} };
 

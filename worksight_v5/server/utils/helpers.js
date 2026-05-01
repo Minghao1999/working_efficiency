@@ -3,7 +3,7 @@ import XLSX from "xlsx";
 export const TARGET_MAP = { "1号仓": 34.57, "2号仓": 37.11, "5号仓": 11.3 };
 
 export function sheetRows(file, sheetName = null) {
-  const wb = XLSX.read(file.buffer, { type: "buffer", cellDates: true });
+  const wb = workbook(file);
   const name = sheetName || wb.SheetNames[0];
   const ws = wb.Sheets[name];
   if (!ws) throw new Error(`找不到 sheet：${name}`);
@@ -14,15 +14,24 @@ export function sheetRows(file, sheetName = null) {
   });
 }
 
-export function workbook(file) {
-  return XLSX.read(file.buffer, { type: "buffer", cellDates: true });
+export function workbook(file, options = {}) {
+  const readOptions = { cellDates: true, dense: true, ...options };
+  if (file.buffer) return XLSX.read(file.buffer, { type: "buffer", ...readOptions });
+  if (file.path) return XLSX.readFile(file.path, readOptions);
+  throw new Error("Cannot read uploaded file");
 }
 
-export function sheetRowsFromWorkbook(wb, sheetName = null) {
+export function sheetRowsFromWorkbook(wb, sheetName = null, { limit = null } = {}) {
   const name = sheetName || wb.SheetNames[0];
   const ws = wb.Sheets[name];
   if (!ws) throw new Error(`找不到 sheet：${name}`);
-  return XLSX.utils.sheet_to_json(ws, { defval: null, raw: false }).map((row) => {
+  const options = { defval: null, raw: false };
+  if (limit != null && ws["!ref"]) {
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    range.e.r = Math.min(range.e.r, range.s.r + limit);
+    options.range = range;
+  }
+  return XLSX.utils.sheet_to_json(ws, options).map((row) => {
     const out = {};
     for (const [key, value] of Object.entries(row)) out[String(key).trim()] = value;
     return out;
@@ -30,7 +39,7 @@ export function sheetRowsFromWorkbook(wb, sheetName = null) {
 }
 
 export function firstSheetRows(file, n = 5) {
-  return sheetRows(file).slice(0, n);
+  return sheetRowsFromWorkbook(workbook(file, { sheets: 0 }), null, { limit: n });
 }
 
 export function cols(rows) {
@@ -206,14 +215,18 @@ export function maxDate(rows, fn) {
 
 export function classifyFile(file) {
   try {
-    const c = cols(firstSheetRows(file));
-    const joined = c.join("");
-    if (c.includes("任务单开始时间") && c.includes("任务单结束时间")) return "task";
-    if (c.includes("实际上班时间") && c.includes("实际下班时间")) return "attendance";
-    if (c.includes("打包完成时间") && c.includes("件数")) return "volume";
-    if (c.includes("打卡时间") && joined.includes("进出仓标识")) return "punch";
-    return "unknown";
+    return classifyWorkbook(workbook(file, { sheets: 0 }));
   } catch {
     return "unknown";
   }
+}
+
+export function classifyWorkbook(wb) {
+  const c = cols(sheetRowsFromWorkbook(wb, null, { limit: 5 }));
+  const joined = c.join("");
+  if (c.includes("任务单开始时间") && c.includes("任务单结束时间")) return "task";
+  if (c.includes("实际上班时间") && c.includes("实际下班时间")) return "attendance";
+  if (c.includes("打包完成时间") && c.includes("件数")) return "volume";
+  if (c.includes("打卡时间") && joined.includes("进出仓标识")) return "punch";
+  return "unknown";
 }

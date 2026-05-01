@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Boxes, FileSpreadsheet, Package, Timer, Users } from "lucide-react";
 import { API } from "../constants";
-import { ChartPanel, FilePicker, Metric, ProgressBar, SelectLine, SelectedFileList, Tabs } from "../components/controls";
+import { ChartPanel, FilePicker, GlassSelect, Metric, ProgressBar, SelectLine, SelectedFileList, Tabs } from "../components/controls";
 import { DataTable } from "../components/tables";
 import { Donut, Gantt, IndirectChart, filterShift } from "../components/charts";
 import { fileIdentity, isLikelyVolumeFile, mergeEfficiencyVolumeDelta, mergeFiles } from "../utils/files";
@@ -123,9 +123,7 @@ export function EfficiencyPage() {
           <div className="toolbar">
             <label>
               Date
-              <select value={date} onChange={(e) => setDate(e.target.value)}>
-                {data.dates.map((d) => <option key={d}>{d}</option>)}
-              </select>
+              <GlassSelect value={date} options={data.dates} onChange={setDate} />
             </label>
           </div>
 

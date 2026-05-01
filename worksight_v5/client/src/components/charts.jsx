@@ -3,12 +3,32 @@ import Plot from "react-plotly.js";
 import { TYPE_COLORS } from "../constants";
 import { palette, previousDate, timeOf } from "../utils/formatters";
 
+const HOVER_LABEL = {
+  bgcolor: "rgba(255, 255, 255, 0.96)",
+  bordercolor: "rgba(134, 174, 232, 0.55)",
+  font: { color: "#111827", size: 13 }
+};
+
+const HOVER_BORDER_COLORS = {
+  work: "rgba(116, 159, 222, 0.72)",
+  idle: "rgba(166, 151, 211, 0.62)",
+  break: "rgba(218, 186, 94, 0.58)",
+  overnight: "rgba(17, 24, 39, 0.5)"
+};
+
+const HOVER_BG_COLORS = {
+  work: "rgba(232, 242, 255, 0.96)",
+  idle: "rgba(245, 240, 255, 0.96)",
+  break: "rgba(255, 249, 226, 0.96)",
+  overnight: "rgba(242, 243, 245, 0.96)"
+};
+
 export function Donut({ ratio, work, attendance, note = "" }) {
   return (
     <div className="metric donut-card">
       <Plot
-        data={[{ type: "pie", labels: ["Work", "Idle"], values: [work, Math.max(0, attendance - work)], hole: 0.65, marker: { colors: ["#2563EB", "#D7E3FF"] }, textinfo: "none", hovertemplate: "%{label}: %{percent:.1%} (%{value:.1f}h)<extra></extra>" }]}
-        layout={{ height: note ? 140 : 160, margin: { l: 0, r: 0, t: 0, b: 0 }, annotations: [{ text: `${ratio.toFixed(1)}%`, x: 0.5, y: 0.5, showarrow: false, font: { size: 22, color: "#2563EB" } }], showlegend: false }}
+        data={[{ type: "pie", labels: ["Work", "Idle"], values: [work, Math.max(0, attendance - work)], hole: 0.65, marker: { colors: ["#86AEE8", "#D8E3F0"] }, textinfo: "none", hovertemplate: "%{label}: %{percent:.1%} (%{value:.1f}h)<extra></extra>", hoverlabel: HOVER_LABEL }]}
+        layout={{ height: note ? 140 : 160, margin: { l: 0, r: 0, t: 0, b: 0 }, annotations: [{ text: `${ratio.toFixed(1)}%`, x: 0.5, y: 0.5, showarrow: false, font: { size: 22, color: "#5F7FAE" } }], showlegend: false }}
         config={{ displayModeBar: false, responsive: true }}
         useResizeHandler
         style={{ width: "100%" }}
@@ -38,6 +58,11 @@ export function Gantt({ rows, allRows, date, shift, summary, history }) {
       x: items.map((r) => new Date(r.end) - new Date(r.start)),
       base: items.map((r) => new Date(r.start)),
       marker: { color: TYPE_COLORS[type] },
+      hoverlabel: {
+        ...HOVER_LABEL,
+        bgcolor: HOVER_BG_COLORS[type] || HOVER_LABEL.bgcolor,
+        bordercolor: HOVER_BORDER_COLORS[type] || HOVER_LABEL.bordercolor
+      },
       customdata: items.map((r) => {
         const person = stats[r.name] || {};
         return [
@@ -74,12 +99,13 @@ export function Gantt({ rows, allRows, date, shift, summary, history }) {
     const prevRatio = history?.[prev]?.[name];
     const arrow = prevRatio == null ? "" : ratio > prevRatio ? " ↑" : ratio < prevRatio ? " ↓" : "";
     const color = arrow.includes("↑") ? "#16A34A" : arrow.includes("↓") ? "#DC2626" : "#0F172A";
-    return { x: 1.01, y: name, xref: "paper", yref: "y", text: `${ratio.toFixed(1)}%${arrow}`, showarrow: false, xanchor: "left", font: { size: 11, color } };
+    const themeColor = arrow ? (ratio > prevRatio ? "#5F7FAE" : "#111827") : "#0F172A";
+    return { x: 1.01, y: name, xref: "paper", yref: "y", text: `${ratio.toFixed(1)}%${arrow}`, showarrow: false, xanchor: "left", font: { size: 11, color: themeColor } };
   });
   return (
     <Plot
       data={traces}
-      layout={{ barmode: "stack", height: Math.max(450, names.length * 32), margin: { l: 190, r: 165, t: 20, b: 35 }, plot_bgcolor: "white", paper_bgcolor: "white", yaxis: { autorange: "reversed", categoryorder: "array", categoryarray: names, automargin: true }, xaxis: { title: "Time", type: "date" }, legend: { x: 1.09, y: 1, xanchor: "left", yanchor: "top" }, annotations }}
+      layout={{ barmode: "stack", height: Math.max(450, names.length * 32), margin: { l: 190, r: 165, t: 20, b: 35 }, plot_bgcolor: "white", paper_bgcolor: "white", hoverlabel: HOVER_LABEL, yaxis: { autorange: "reversed", categoryorder: "array", categoryarray: names, automargin: true }, xaxis: { title: "Time", type: "date" }, legend: { x: 1.09, y: 1, xanchor: "left", yanchor: "top" }, annotations }}
       config={{ responsive: true }}
       useResizeHandler
       style={{ width: "100%" }}
@@ -156,8 +182,9 @@ export function PersonEfficiencyChart({ rows, personName }) {
       name: "Non-Burst Picking Efficiency",
       x,
       y: chartRows.map((row) => Number(row.拣非爆品效率) || 0),
-      line: { color: "#2563eb", width: 3 },
-      marker: { size: 8 }
+      line: { color: "#6F91C2", width: 3 },
+      marker: { size: 8 },
+      hoverlabel: HOVER_LABEL
     },
     {
       type: "scatter",
@@ -165,8 +192,9 @@ export function PersonEfficiencyChart({ rows, personName }) {
       name: "Total Efficiency",
       x,
       y: chartRows.map((row) => Number(row.总效率) || 0),
-      line: { color: "#16a34a", width: 2 },
-      marker: { size: 7 }
+      line: { color: "#111827", width: 2 },
+      marker: { size: 7 },
+      hoverlabel: HOVER_LABEL
     },
     {
       type: "scatter",
@@ -175,8 +203,9 @@ export function PersonEfficiencyChart({ rows, personName }) {
       x,
       y: chartRows.map((row) => Number(row.有效工时) || 0),
       yaxis: "y2",
-      line: { color: "#f59e0b", width: 2 },
-      marker: { size: 7 }
+      line: { color: "#8FB3E8", width: 2 },
+      marker: { size: 7 },
+      hoverlabel: HOVER_LABEL
     }
   ];
   return (
@@ -188,6 +217,7 @@ export function PersonEfficiencyChart({ rows, personName }) {
           margin: { l: 56, r: 24, t: 18, b: 46 },
           plot_bgcolor: "white",
           paper_bgcolor: "white",
+          hoverlabel: HOVER_LABEL,
           xaxis: { title: "Date", type: "category" },
           yaxis: { title: "Efficiency", rangemode: "tozero" },
           yaxis2: { title: "Effective Hours", overlaying: "y", side: "right", rangemode: "tozero" },
