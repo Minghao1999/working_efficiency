@@ -113,7 +113,44 @@ export function ProgressBar({ value, label }) {
 }
 
 export function Tabs({ tabs, value, onChange }) {
-  return <div className="tabs">{tabs.map(([id, label]) => <button key={id} className={value === id ? "active" : ""} onClick={() => onChange(id)}>{label}</button>)}</div>;
+  const activeIndex = Math.max(0, tabs.findIndex(([id]) => id === value));
+  return (
+    <div className="tabs" style={{ "--active-index": activeIndex, "--tab-count": tabs.length }}>
+      {tabs.map(([id, label]) => <button key={id} className={value === id ? "active" : ""} onClick={() => onChange(id)}>{label}</button>)}
+    </div>
+  );
+}
+
+export function GlassSelect({ value, options, onChange, className = "" }) {
+  const [open, setOpen] = useState(false);
+  const selected = options.includes(value) ? value : options[0] || "";
+
+  return (
+    <div className={`glass-select ${open ? "open" : ""} ${className}`} onBlur={() => setOpen(false)}>
+      <button type="button" className="glass-select-trigger" onClick={() => setOpen((current) => !current)}>
+        <span>{selected}</span>
+        <span className="glass-select-caret">⌄</span>
+      </button>
+      {open && (
+        <div className="glass-select-menu">
+          {options.map((option) => (
+            <button
+              type="button"
+              key={option}
+              className={option === selected ? "active" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ChartPanel({ title, caption, children }) {
@@ -121,7 +158,7 @@ export function ChartPanel({ title, caption, children }) {
 }
 
 export function SelectLine({ label, value, options, onChange }) {
-  return <label className="select-line">{label}<select value={value} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></label>;
+  return <label className="select-line">{label}<GlassSelect value={value} options={options} onChange={onChange} /></label>;
 }
 
 export function ConfirmDialog({ title, message, onCancel, onConfirm }) {

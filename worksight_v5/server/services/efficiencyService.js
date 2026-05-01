@@ -1,8 +1,7 @@
-import XLSX from "xlsx";
 import {
   addDays,
   adjustWorkDate,
-  classifyFile,
+  classifyWorkbook,
   colAt,
   dayKey,
   extractWarehouse,
@@ -18,12 +17,18 @@ import {
   sum,
   timeText,
   val,
+  workbook,
+  sheetRowsFromWorkbook,
   warehouseValue
 } from "../utils/helpers.js";
 import { summarizeCompletedVolume } from "./volumeService.js";
 
-function loadAttendanceData(attendanceFile) {
-  const df2Raw = attendanceFile ? sheetRows(attendanceFile) : [];
+function rowsFor(file, wb, sheetName = null) {
+  return wb ? sheetRowsFromWorkbook(wb, sheetName) : sheetRows(file, sheetName);
+}
+
+function loadAttendanceData(attendanceFile, wb = null) {
+  const df2Raw = attendanceFile ? rowsFor(attendanceFile, wb) : [];
   return df2Raw.map((r) => {
     const employee_no = String(colAt(r, 1) ?? "").trim();
     return {
@@ -48,8 +53,8 @@ function applyAttendanceNames(df, df2) {
   }));
 }
 
-function loadTaskData(taskFile, df2 = []) {
-  const df1 = sheetRows(taskFile);
+function loadTaskData(taskFile, df2 = [], wb = null) {
+  const df1 = rowsFor(taskFile, wb);
   const nameMap = new Map(df2.map((r) => [r.employee_no, r.real_name]));
   return df1.map((r) => {
     let start = parseDate(val(r, "任务单开始时间"));
@@ -100,13 +105,13 @@ function buildIscOnlyTimeline(df) {
   return records;
 }
 
-function loadVolumeData(file) {
-  return summarizeCompletedVolume(file).unitsByDate;
+function loadVolumeData(file, wb = null) {
+  return summarizeCompletedVolume(file, wb).unitsByDate;
 }
 
-function loadBreakData(file) {
+function loadBreakData(file, wb = null) {
   if (!file) return [];
-  const rows = sheetRows(file)
+  const rows = rowsFor(file, wb)
     .map((r) => ({
       emp_no: String(colAt(r, 3) ?? "").trim(),
       time: parseDate(colAt(r, 12)),
@@ -133,8 +138,30 @@ function loadBreakData(file) {
   return breaks;
 }
 
-function loadIndirectData(file) {
+function parseIndirectRows(rows) {
+  return rows
+    .map((r) => {
+      const start = parseDate(val(r, "开始时间"));
+      const end = parseDate(val(r, "结束时间"));
+      return {
+        employee_no: String(val(r, "employee_no") ?? "").trim(),
+        "操作分类": String(val(r, "操作分类") ?? "未分类").trim() || "未分类",
+        "开始时间": start,
+        "结束时间": end,
+        "间接工时(分)": num(val(r, "间接工时(分)"), 0),
+        work_date: adjustWorkDate(start),
+        duration: hoursBetween(start, end)
+      };
+    })
+    .filter((r) => r["开始时间"] && r["结束时间"] && r["结束时间"] > r["开始时间"]);
+}
+
+function loadIndirectData(file, wb = null) {
   try {
+    if (wb) {
+      const sheetName = wb.SheetNames.find((name) => String(name).includes("间接")) || "间接工时明细-间接工时";
+      return parseIndirectRows(rowsFor(file, wb, sheetName));
+    }
     return sheetRows(file, "间接工时明细-间接工时")
       .map((r) => {
         const start = parseDate(val(r, "开始时间"));
@@ -158,6 +185,9 @@ function loadIndirectData(file) {
 function buildTimeline(df, df2, groupMap, breaks = []) {
   const records = [];
   const processed = new Set();
+  const dfByDay = groupBy(df.filter((r) => r.work_date), (r) => r.work_date);
+  const tasksByEmpDay = groupBy(df.filter((r) => r.work_date), (r) => `${String(r.employee_no)}|${r.work_date}`);
+  const breaksByEmpDay = groupBy(breaks.filter((r) => r.work_date), (r) => `${String(r.emp_no).trim()}|${r.work_date}`);
 
   function clipToShift(item, workStart, workEnd) {
     const start = parseDate(item.start);
@@ -170,8 +200,8 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
   }
 
   function getIscTime(empNo, day) {
-    const rows = df.filter((r) => String(r.employee_no) === String(empNo) && r.work_date === day);
-    return { start: minDate(rows, (r) => r.上班时间), end: maxDate(rows, (r) => r.下班时间) };
+    const rows = tasksByEmpDay.get(`${String(empNo)}|${day}`) || [];
+    return { start: minDate(rows, (r) => r.start), end: maxDate(rows, (r) => r.end) };
   }
 
   for (const row of df2) {
@@ -189,12 +219,10 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
     processed.add(`${empNo}|${day}`);
     const shiftName = String(row.班次名称 || "");
     const shift = shiftName.includes("早") || shiftName.includes("白") ? "morning" : (shiftName.includes("晚") ? "evening" : (workStart.getHours() < 15 ? "morning" : "evening"));
-    let tasks = df
-      .filter((r) => String(r.employee_no) === empNo && r.work_date === day)
+    let tasks = (tasksByEmpDay.get(`${empNo}|${day}`) || [])
       .map((r) => clipToShift({ ...r, type: "work", employee_no: empNo }, workStart, workEnd))
       .filter(Boolean);
-    tasks.push(...breaks
-      .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day)
+    tasks.push(...(breaksByEmpDay.get(`${empNo}|${day}`) || [])
       .map((b) => clipToShift({ ...b, employee_no: empNo }, workStart, workEnd))
       .filter(Boolean));
     tasks = tasks.sort((a, b) => a.start - b.start);
@@ -212,7 +240,7 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
 
   const days = [...new Set(df.map((r) => r.work_date).filter(Boolean))].sort();
   for (const day of days) {
-    for (const [empNo, items] of groupBy(df.filter((r) => r.work_date === day), (r) => String(r.employee_no))) {
+    for (const [empNo, items] of groupBy(dfByDay.get(day) || [], (r) => String(r.employee_no))) {
       if (processed.has(`${empNo}|${day}`)) continue;
       const display = items[0].display_name;
       const groupName = groupMap.get(empNo) || "Unknown";
@@ -224,8 +252,8 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
       let tasks = items
         .map((r) => clipToShift({ ...r, type: "work" }, workStart, workEnd))
         .filter(Boolean);
-      tasks.push(...breaks
-        .filter((b) => String(b.emp_no).trim() === empNo && b.work_date === day && String(b.group).trim() === groupName)
+      tasks.push(...(breaksByEmpDay.get(`${empNo}|${day}`) || [])
+        .filter((b) => String(b.group).trim() === groupName)
         .map((b) => clipToShift(b, workStart, workEnd))
         .filter(Boolean));
       tasks = tasks.sort((a, b) => a.start - b.start);
@@ -422,13 +450,14 @@ export function analyzeEfficiency(files, { sessionId = "default", activeFiles = 
 
   files.forEach((f, index) => {
     const identity = fileKeys[index] || `${f.originalname}|${f.size || 0}`;
-    const type = classifyFile(f);
+    const wb = workbook(f);
+    const type = classifyWorkbook(wb);
     if (type === "task" && cache.task?.identity !== identity) {
-      const df = loadTaskData(f, cache.attendance?.df2 || []);
-      cache.task = { identity, df, indirectDf: loadIndirectData(f) };
+      const df = loadTaskData(f, cache.attendance?.df2 || [], wb);
+      cache.task = { identity, df, indirectDf: loadIndirectData(f, wb) };
     }
     if (type === "attendance" && cache.attendance?.identity !== identity) {
-      const df2 = loadAttendanceData(f);
+      const df2 = loadAttendanceData(f, wb);
       cache.attendance = {
         identity,
         df2,
@@ -436,10 +465,10 @@ export function analyzeEfficiency(files, { sessionId = "default", activeFiles = 
       };
     }
     if (type === "volume" && cache.volume?.identity !== identity) {
-      cache.volume = { identity, volumeData: loadVolumeData(f) };
+      cache.volume = { identity, volumeData: loadVolumeData(f, wb) };
     }
     if (type === "punch" && cache.punch?.identity !== identity) {
-      cache.punch = { identity, breakDf: loadBreakData(f) };
+      cache.punch = { identity, breakDf: loadBreakData(f, wb) };
     }
   });
 
@@ -460,6 +489,10 @@ export function analyzeEfficiency(files, { sessionId = "default", activeFiles = 
   const { history_ratios, history_wait } = buildHistory(timeline);
   const currentWarehouse = mostCommon(df.map((r) => extractWarehouse(r.warehouse_name)));
   const dates = [...new Set(timeline.map((r) => r.date))].sort();
+  const timelineByDate = groupBy(timeline, (r) => r.date);
+  const dfByDate = groupBy(df.filter((r) => r.work_date), (r) => r.work_date);
+  const attendanceByDate = groupBy(df2.filter((r) => adjustWorkDate(colAt(r, 13))), (r) => adjustWorkDate(colAt(r, 13)));
+  const indirectByDate = groupBy(indirectDf.filter((r) => r.work_date), (r) => r.work_date);
   const completeness = {
     attendance: Boolean(cache.attendance),
     volume: Boolean(cache.volume),
@@ -467,7 +500,9 @@ export function analyzeEfficiency(files, { sessionId = "default", activeFiles = 
   };
   const days = {};
   for (const date of dates) {
-    const dfDay = timeline.filter((r) => r.date === date);
+    const dfDay = timelineByDate.get(date) || [];
+    const taskDay = dfByDate.get(date) || [];
+    const attendanceDay = attendanceByDate.get(date) || [];
     const summary = buildSummary(dfDay, df, df2, date);
     const totalWork = sum(dfDay.filter((r) => ["work", "overnight"].includes(r.type)), (r) => r.duration);
     const totalAttendance = sum(dfDay, (r) => r.duration);

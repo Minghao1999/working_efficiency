@@ -1,10 +1,10 @@
 export const API = "http://127.0.0.1:3001";
 
 export const TYPE_COLORS = {
-  work: "#7EC398",
-  overnight: "#8B7ABD",
-  idle: "#C6D7EB",
-  break: "#D9E6AF"
+  work: "#86AEE8",
+  overnight: "#111827",
+  idle: "#D8E3F0",
+  break: "#F3E6B8"
 };
 
 export const COLUMN_LABELS = {
