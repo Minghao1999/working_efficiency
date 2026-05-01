@@ -3,6 +3,7 @@ import { BarChart3 } from "lucide-react";
 import { Home } from "./pages/Home";
 import { EfficiencyPage } from "./pages/EfficiencyPage";
 import { WeeklyPage } from "./pages/WeeklyPage";
+import { MiniAppsPage } from "./pages/MiniAppsPage";
 
 export function App() {
   const [page, setPage] = useState("home");
@@ -19,6 +20,7 @@ export function App() {
         <button className={page === "home" ? "nav active" : "nav"} onClick={() => setPage("home")}>Overview</button>
         <button className={page === "efficiency" ? "nav active" : "nav"} onClick={() => setPage("efficiency")}>Efficiency Dashboard</button>
         <button className={page === "weekly" ? "nav active" : "nav"} onClick={() => setPage("weekly")}>Order / Unit Analysis</button>
+        <button className={page === "miniApps" ? "nav active" : "nav"} onClick={() => setPage("miniApps")}>Mini Programs</button>
       </aside>
       <main>
         <div hidden={page !== "home"}>
@@ -29,6 +31,9 @@ export function App() {
         </div>
         <div hidden={page !== "weekly"}>
           <WeeklyPage />
+        </div>
+        <div hidden={page !== "miniApps"}>
+          <MiniAppsPage />
         </div>
       </main>
     </div>

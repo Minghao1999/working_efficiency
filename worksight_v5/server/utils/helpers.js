@@ -145,13 +145,13 @@ export function hoursBetween(a, b) {
 export function adjustWorkDate(dt) {
   dt = parseDate(dt);
   if (!dt) return null;
-  return dt.getHours() < 6 ? dayKey(addDays(dt, -1)) : dayKey(dt);
+  return dayKey(dt);
 }
 
 export function businessDate(dt) {
   dt = parseDate(dt);
   if (!dt) return null;
-  return dt.getHours() < 5 ? dayKey(addDays(dt, -1)) : dayKey(dt);
+  return dayKey(dt);
 }
 
 export function extractWarehouse(name) {

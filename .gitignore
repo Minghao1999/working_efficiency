@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -18,3 +18,5 @@ dist/
 venv/
 
 *.xlsx
+wms_browser_profile/
+tools/new_product_automation/wms_browser_profile/
