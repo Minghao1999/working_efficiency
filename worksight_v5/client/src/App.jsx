@@ -4,6 +4,7 @@ import { Home } from "./pages/Home";
 import { EfficiencyPage } from "./pages/EfficiencyPage";
 import { WeeklyPage } from "./pages/WeeklyPage";
 import { MiniAppsPage } from "./pages/MiniAppsPage";
+import { FeedbackPage } from "./pages/FeedbackPage";
 
 export function App() {
   const [page, setPage] = useState("home");
@@ -21,6 +22,7 @@ export function App() {
         <button className={page === "efficiency" ? "nav active" : "nav"} onClick={() => setPage("efficiency")}>Efficiency Dashboard</button>
         <button className={page === "weekly" ? "nav active" : "nav"} onClick={() => setPage("weekly")}>Order / Unit Analysis</button>
         <button className={page === "miniApps" ? "nav active" : "nav"} onClick={() => setPage("miniApps")}>Mini Programs</button>
+        <button className={page === "feedback" ? "nav active" : "nav"} onClick={() => setPage("feedback")}>Feedback</button>
       </aside>
       <main>
         <div hidden={page !== "home"}>
@@ -34,6 +36,9 @@ export function App() {
         </div>
         <div hidden={page !== "miniApps"}>
           <MiniAppsPage />
+        </div>
+        <div hidden={page !== "feedback"}>
+          <FeedbackPage />
         </div>
       </main>
     </div>
