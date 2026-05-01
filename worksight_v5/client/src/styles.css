@@ -423,10 +423,21 @@ select {
   padding: 7px 34px 7px 10px;
 }
 
+input {
+  min-height: 42px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  padding: 8px 11px;
+}
+
 select:focus,
+input:focus,
 .file-picker span:focus-within {
   outline: 2px solid rgba(37, 99, 235, 0.18);
   outline-offset: 2px;
+  border-color: #93b4ff;
 }
 
 .file-picker {
@@ -892,6 +903,174 @@ tbody tr:last-child td { border-bottom: 0; }
   line-height: 1.55;
 }
 
+.picking-tool {
+  display: grid;
+  gap: 14px;
+}
+
+.picking-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 460px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.picking-form-card {
+  gap: 16px;
+}
+
+.ws-field {
+  display: grid;
+  gap: 7px;
+  color: #344054;
+  font-weight: 750;
+}
+
+.ws-field input {
+  width: 100%;
+}
+
+.ws-field select {
+  width: 100%;
+  min-height: 42px;
+}
+
+.ws-field input::placeholder {
+  color: #98a2b3;
+}
+
+.picking-actions {
+  flex-wrap: wrap;
+}
+
+.picking-actions .primary-btn {
+  margin-top: 0;
+}
+
+.picking-result-card {
+  min-height: 304px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #e6eaf0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 22px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.picking-result-card.active {
+  place-items: stretch;
+  align-content: center;
+  gap: 14px;
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  max-width: 360px;
+  text-align: center;
+  color: #667085;
+}
+
+.empty-state svg {
+  color: #2563eb;
+}
+
+.empty-state strong {
+  color: #111827;
+  font-size: 20px;
+}
+
+.result-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #027a48;
+  font-weight: 800;
+}
+
+.result-status svg {
+  color: #027a48;
+}
+
+.recommendation {
+  color: #0f172a;
+  font-size: clamp(42px, 6vw, 76px);
+  line-height: 0.95;
+  overflow-wrap: anywhere;
+}
+
+.result-qty {
+  color: #475467;
+  font-weight: 750;
+}
+
+.picking-log {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475467;
+  padding: 9px 10px;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.log-card {
+  gap: 14px;
+}
+
+.log-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: #111827;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 800;
+  text-align: left;
+}
+
+.log-toggle svg {
+  color: #2563eb;
+}
+
+.log-collapsed {
+  color: #667085;
+  font-size: 12px;
+}
+
+.spin-icon {
+  animation: spin 900ms linear infinite;
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1080px) {
   .sidebar {
     align-items: flex-start;
@@ -915,7 +1094,8 @@ tbody tr:last-child td { border-bottom: 0; }
 
   .automation-layout,
   .field-grid,
-  .download-hero {
+  .download-hero,
+  .picking-layout {
     grid-template-columns: 1fr;
   }
 }
