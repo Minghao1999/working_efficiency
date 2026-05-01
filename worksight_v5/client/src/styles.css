@@ -9,6 +9,7 @@
 html { background: #f7f8fb; }
 body { margin: 0; min-width: 320px; }
 button, input, select { font: inherit; }
+textarea { font: inherit; }
 button { color: inherit; }
 
 .app-shell {
@@ -432,8 +433,20 @@ input {
   padding: 8px 11px;
 }
 
+textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  padding: 10px 11px;
+}
+
 select:focus,
 input:focus,
+textarea:focus,
 .file-picker span:focus-within {
   outline: 2px solid rgba(37, 99, 235, 0.18);
   outline-offset: 2px;
@@ -939,6 +952,10 @@ tbody tr:last-child td { border-bottom: 0; }
   color: #98a2b3;
 }
 
+.ws-field textarea::placeholder {
+  color: #98a2b3;
+}
+
 .picking-actions {
   flex-wrap: wrap;
 }
@@ -1071,6 +1088,96 @@ tbody tr:last-child td { border-bottom: 0; }
   }
 }
 
+.feedback-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.feedback-form {
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-form .segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feedback-submit {
+  width: fit-content;
+}
+
+.feedback-list-panel {
+  min-height: 360px;
+}
+
+.feedback-list {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-item {
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.feedback-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.feedback-item h2 {
+  margin: 0 0 7px;
+  color: #111827;
+  font-size: 17px;
+}
+
+.feedback-item p {
+  margin: 0;
+  color: #475467;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.feedback-item small,
+.feedback-item time {
+  color: #667085;
+  font-size: 12px;
+}
+
+.feedback-item small {
+  display: block;
+  margin-top: 10px;
+}
+
+.feedback-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.feedback-badge.feature {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.feedback-badge.change {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
 @media (max-width: 1080px) {
   .sidebar {
     align-items: flex-start;
@@ -1095,7 +1202,8 @@ tbody tr:last-child td { border-bottom: 0; }
   .automation-layout,
   .field-grid,
   .download-hero,
-  .picking-layout {
+  .picking-layout,
+  .feedback-layout {
     grid-template-columns: 1fr;
   }
 }

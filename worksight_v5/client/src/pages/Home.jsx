@@ -1,5 +1,5 @@
 import React from "react";
-import { FileSpreadsheet, Package, Users } from "lucide-react";
+import { FileSpreadsheet, MessageSquarePlus, Package, Users } from "lucide-react";
 
 export function Home({ onNavigate }) {
   return (
@@ -23,6 +23,11 @@ export function Home({ onNavigate }) {
           <FileSpreadsheet size={32} />
           <h2>Mini Programs</h2>
           <p>Open small tools for warehouse operations</p>
+        </button>
+        <button className="feature-tile" onClick={() => onNavigate("feedback")}>
+          <MessageSquarePlus size={32} />
+          <h2>Feedback</h2>
+          <p>Share feature ideas and change requests for WorkSight</p>
         </button>
       </div>
     </section>
