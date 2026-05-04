@@ -33,23 +33,21 @@ export function summarizeCompletedVolume(file, workbook = null) {
   if (!headerRow) return { unitsByDate: {}, ordersByDate: {} };
 
   const dateIdx = headerIndex(headerRow, ["打包完成时间"]);
-  const unitIdx = headerIndex(headerRow, ["件数", "实际件数"]);
+  const unitIdx = headerIndex(headerRow, ["件数", "实际件数", "piecesQty"]);
   const cancelIdx = headerIndex(headerRow, ["是否取消"]);
-  const statusIdx = headerIndex(headerRow, ["状态"]);
-  const orderIdx = headerIndex(headerRow, ["京东订单号"]);
-  if (dateIdx < 0 || unitIdx < 0 || statusIdx < 0) return { unitsByDate: {}, ordersByDate: {} };
+  const orderIdx = headerIndex(headerRow, ["JDOrderNO", "京东订单号", "jdOrderNo", "outboundNo", "salesPlatformOrder", "channelsOutboundNo"]);
+  if (dateIdx < 0 || unitIdx < 0) return { unitsByDate: {}, ordersByDate: {} };
 
   const dateCol = range.s.c + dateIdx;
   const unitCol = range.s.c + unitIdx;
   const cancelCol = cancelIdx >= 0 ? range.s.c + cancelIdx : -1;
-  const statusCol = range.s.c + statusIdx;
   const orderCol = orderIdx >= 0 ? range.s.c + orderIdx : -1;
   const unitsByDate = {};
   const orderSets = {};
 
   for (let i = headerRowIndex + 1; i <= range.e.r; i++) {
-    if (String(cellValue(i, statusCol) ?? "").trim() !== "交接完成") continue;
-    if (cancelCol >= 0 && String(cellValue(i, cancelCol) ?? "").trim() === "是") continue;
+    const canceled = String(cellValue(i, cancelCol) ?? "").trim().toLowerCase();
+    if (cancelCol >= 0 && ["是", "yes", "true", "1"].includes(canceled)) continue;
     const date = parseDate(cellValue(i, dateCol));
     if (!date) continue;
     const key = dayKey(date);

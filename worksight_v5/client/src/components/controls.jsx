@@ -2,32 +2,39 @@ import React, { useEffect, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import { fileIdentity } from "../utils/files";
 
-export function UploadBox({ title, caption, disabled = false, onChange }) {
+export function UploadBox({ title, caption, disabled = false, onChange, actionSlot = null }) {
   const [fileName, setFileName] = useState("");
   const clearFile = () => {
     setFileName("");
     onChange(null);
   };
   return (
-    <div className={disabled ? "upload-box disabled" : "upload-box"}>
-      <strong>{title}</strong>
-      <span>{caption}</span>
-      <FilePicker
-        accept=".xlsx,.xls"
-        disabled={disabled}
-        files={fileName ? [{ name: fileName }] : []}
-        onChange={(files) => {
-          const file = files[0] || null;
-          setFileName(file?.name || "");
-          onChange(file);
-        }}
-      />
-      {fileName && (
-        <div className="selected-file single-upload-file">
-          <span>{fileName}</span>
-          <button type="button" onClick={clearFile} aria-label={`Remove ${fileName}`}>
-            <Trash2 size={15} />
-          </button>
+    <div className={`${disabled ? "upload-box disabled" : "upload-box"} ${actionSlot ? "upload-box-with-tools" : ""}`}>
+      <div className="upload-box-main">
+        <strong>{title}</strong>
+        <span>{caption}</span>
+        <FilePicker
+          accept=".xlsx,.xls"
+          disabled={disabled}
+          files={fileName ? [{ name: fileName }] : []}
+          onChange={(files) => {
+            const file = files[0] || null;
+            setFileName(file?.name || "");
+            onChange(file);
+          }}
+        />
+        {fileName && (
+          <div className="selected-file single-upload-file">
+            <span>{fileName}</span>
+            <button type="button" onClick={clearFile} aria-label={`Remove ${fileName}`}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        )}
+      </div>
+      {actionSlot && (
+        <div className="upload-box-tools">
+          {actionSlot}
         </div>
       )}
     </div>

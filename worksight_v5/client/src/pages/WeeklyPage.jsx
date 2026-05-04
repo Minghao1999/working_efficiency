@@ -1,11 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Download, RotateCcw } from "lucide-react";
+import { Download, RotateCcw, Search } from "lucide-react";
 import { API } from "../constants";
-import { LaborHoursInput, Metric, ProgressBar, SelectLine, UploadBox } from "../components/controls";
+import { GlassSelect, LaborHoursInput, Metric, ProgressBar, SelectLine, UploadBox } from "../components/controls";
 import { DailyDetailTable, EditablePersonTable } from "../components/tables";
 import { PersonEfficiencyChart, PickingGanttChart } from "../components/charts";
 import { exportRows } from "../utils/export";
 import { formatUploadError, personDeleteKey } from "../utils/formatters";
+
+const WAREHOUSE_OPTIONS = [
+  { value: "1", label: "Warehouse 1" },
+  { value: "2", label: "Warehouse 2" },
+  { value: "5", label: "Warehouse 5" }
+];
+
+const TARGET_UPPH_BY_WAREHOUSE = {
+  "1": 34.57,
+  "2": 37.11,
+  "5": 11.3
+};
 
 export function WeeklyPage() {
   const [volume, setVolume] = useState(null);
@@ -19,13 +31,20 @@ export function WeeklyPage() {
   const [personName, setPersonName] = useState("All People");
   const [deleted, setDeleted] = useState(new Set());
   const [manualHours, setManualHours] = useState({});
+  const [unitRange, setUnitRange] = useState({ from: "", to: "" });
+  const [pickRange, setPickRange] = useState({ from: "", to: "" });
+  const [warehouse, setWarehouse] = useState("5");
   const requestSeq = useRef(0);
+  const latestDailyRef = useRef([]);
+
+  useEffect(() => {
+    latestDailyRef.current = data?.daily || [];
+  }, [data?.daily]);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
     const hasAnyUpload = Boolean(volume || pick || (laborMode === "excel" && isc));
     if (!hasAnyUpload) {
-      setData(null);
       setError("");
       setLoading(false);
       return;
@@ -39,6 +58,7 @@ export function WeeklyPage() {
       if (volume) form.append("volume", volume);
       if (laborMode === "excel" && isc) form.append("isc", isc);
       if (pick) form.append("pick", pick);
+      if (!volume && latestDailyRef.current.length) form.append("existingDaily", JSON.stringify(latestDailyRef.current));
 
       try {
         const res = await fetch(`${API}/api/weekly/analyze`, {
@@ -101,6 +121,30 @@ export function WeeklyPage() {
     setDeleted(new Set());
   }
 
+  async function queryUnitData() {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/weekly/query-unit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: unitRange.from, to: unitRange.to, warehouse })
+      });
+      const json = await res.json();
+      if (!res.ok) throw json;
+      setData((current) => ({
+        ...(current || {}),
+        ...json,
+        personEfficiency: current?.personEfficiency || [],
+        pickingGantt: current?.pickingGantt || []
+      }));
+    } catch (e) {
+      setError(formatUploadError(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const dailyRows = useMemo(() => {
     if (!data?.daily) return [];
     if (laborMode !== "manual") return data.daily;
@@ -118,6 +162,10 @@ export function WeeklyPage() {
   }, [data, laborMode, manualHours]);
 
   const hasAttendance = laborMode === "excel" && Boolean(isc);
+  const kpi = data?.kpi || {};
+  const totalOrders = data ? Math.round(kpi.totalOrders || 0).toLocaleString() : "";
+  const totalUnits = data ? Math.round(kpi.totalUnits || 0).toLocaleString() : "";
+  const targetUpph = TARGET_UPPH_BY_WAREHOUSE[warehouse] || "";
 
   return (
     <section className="page">
@@ -127,21 +175,32 @@ export function WeeklyPage() {
       </header>
 
       <div className="upload-grid">
-        <UploadBox title="Upload Unit Data" caption="iWMS 销售单综合查询" onChange={setVolume} />
+        <UploadBox
+          title="Upload Unit Data"
+          caption="iWMS 销售单综合查询"
+          onChange={setVolume}
+          actionSlot={<DateRangeQuery value={unitRange} onChange={setUnitRange} onQuery={queryUnitData} disabled={loading || !unitRange.from || !unitRange.to} />}
+        />
         <LaborHoursInput mode={laborMode} setMode={setLaborMode} onFileChange={setIsc} />
-        <UploadBox title="Upload Picking Data" caption="iWMS 拣货结果查询" onChange={setPick} />
+        <UploadBox
+          title="Upload Picking Data"
+          caption="iWMS 拣货结果查询"
+          onChange={setPick}
+          actionSlot={<DateRangeQuery value={pickRange} onChange={setPickRange} />}
+        />
       </div>
       {loading && <ProgressBar value={72} label="Analyzing uploaded files..." />}
       {error && <div className="error">{error}</div>}
 
+      <div className="kpi-grid">
+        <Metric label="TOTAL ORDERS" value={totalOrders} />
+        <Metric label="TOTAL UNITS" value={totalUnits} />
+        <WarehouseMetric value={warehouse} onChange={setWarehouse} />
+        <Metric label="TARGET UPPH" value={targetUpph} />
+      </div>
+
       {data && (
         <>
-          <div className="kpi-grid">
-            <Metric label="TOTAL ORDERS" value={Math.round(data.kpi.totalOrders).toLocaleString()} />
-            <Metric label="TOTAL UNITS" value={Math.round(data.kpi.totalUnits).toLocaleString()} />
-            <Metric label="WAREHOUSE" value={hasAttendance ? data.kpi.warehouseName : "Please upload attendance table"} />
-            <Metric label="TARGET UPPH" value={hasAttendance ? data.kpi.targetUpph : "Please upload attendance table"} />
-          </div>
           <div className="panel">
             <div className="table-head">
               <h2>Daily Detail</h2>
@@ -149,7 +208,7 @@ export function WeeklyPage() {
             </div>
             <DailyDetailTable
               rows={dailyRows}
-              lowUpph={hasAttendance ? data.kpi.targetUpph : null}
+              lowUpph={targetUpph || null}
               manual={laborMode === "manual"}
               manualHours={manualHours}
               setManualHours={setManualHours}
@@ -183,5 +242,51 @@ export function WeeklyPage() {
         </>
       )}
     </section>
+  );
+}
+
+function WarehouseMetric({ value, onChange }) {
+  return (
+    <div className="metric warehouse-metric">
+      <span>WAREHOUSE</span>
+      <GlassSelect
+        value={value}
+        options={WAREHOUSE_OPTIONS}
+        onChange={onChange}
+        className="warehouse-kpi-select"
+      />
+    </div>
+  );
+}
+
+function DateRangeQuery({ value, onChange, onQuery, disabled = false }) {
+  const queryDisabled = disabled || !onQuery;
+  return (
+    <div className="date-query">
+      <span className="date-query-title">Date Range</span>
+      <div className="date-query-fields">
+        <label>
+          <span>From</span>
+          <input
+            type="date"
+            lang="en"
+            value={value.from}
+            onChange={(event) => onChange((current) => ({ ...current, from: event.target.value }))}
+          />
+        </label>
+        <label>
+          <span>To</span>
+          <input
+            type="date"
+            lang="en"
+            value={value.to}
+            onChange={(event) => onChange((current) => ({ ...current, to: event.target.value }))}
+          />
+        </label>
+      </div>
+      <button type="button" className="primary-btn date-query-btn" onClick={onQuery} disabled={queryDisabled}>
+        <Search size={16} /> Query
+      </button>
+    </div>
   );
 }

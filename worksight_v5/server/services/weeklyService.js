@@ -14,13 +14,24 @@ import {
 } from "../utils/helpers.js";
 import { summarizeCompletedVolume } from "./volumeService.js";
 
-export function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
+export function analyzeWeekly({ volumeFile, iscFile, pickFile, existingDaily = [] }) {
   const daily = [];
   const volumeDates = [];
   if (volumeFile) {
     const { unitsByDate, ordersByDate } = summarizeCompletedVolume(volumeFile);
     for (const [date, units] of Object.entries(unitsByDate)) {
       daily.push({ 业务日期: date, 单量: ordersByDate[date] || 0, 件量: units });
+      volumeDates.push(date);
+    }
+  } else if (Array.isArray(existingDaily)) {
+    for (const row of existingDaily) {
+      const date = row?.业务日期;
+      if (!date) continue;
+      daily.push({
+        业务日期: date,
+        单量: num(row.单量, 0),
+        件量: num(row.件量, 0)
+      });
       volumeDates.push(date);
     }
   }
