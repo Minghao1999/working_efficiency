@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import { fileIdentity } from "../utils/files";
 
 export function UploadBox({ title, caption, disabled = false, onChange }) {
   const [fileName, setFileName] = useState("");
+  const clearFile = () => {
+    setFileName("");
+    onChange(null);
+  };
   return (
-    <label className={disabled ? "upload-box disabled" : "upload-box"}>
+    <div className={disabled ? "upload-box disabled" : "upload-box"}>
       <strong>{title}</strong>
       <span>{caption}</span>
       <FilePicker
@@ -18,7 +22,15 @@ export function UploadBox({ title, caption, disabled = false, onChange }) {
           onChange(file);
         }}
       />
-    </label>
+      {fileName && (
+        <div className="selected-file single-upload-file">
+          <span>{fileName}</span>
+          <button type="button" onClick={clearFile} aria-label={`Remove ${fileName}`}>
+            <Trash2 size={15} />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -29,24 +41,41 @@ export function LaborHoursInput({ mode, setMode, onFileChange }) {
     if (mode === "manual") setFileName("");
   }, [mode]);
 
+  const clearFile = () => {
+    setFileName("");
+    onFileChange(null);
+  };
+
   return (
-    <div className="upload-box">
-      <strong>Labor Hours</strong>
-      <span>ISC 出勤工时(选择Global Export).</span>
-      <div className="segmented">
-        <button type="button" className={mode === "excel" ? "active" : ""} onClick={() => setMode("excel")}>Excel Upload</button>
-        <button type="button" className={mode === "manual" ? "active" : ""} onClick={() => setMode("manual")}>Manual Entry</button>
+    <div className="upload-box labor-hours-box">
+      <div className="upload-box-head">
+        <strong>Labor Hours</strong>
+        <div className="segmented compact sliding" style={{ "--active-index": mode === "excel" ? 0 : 1, "--segment-count": 2 }}>
+          <button type="button" className={mode === "excel" ? "active" : ""} onClick={() => setMode("excel")}>Excel Upload</button>
+          <button type="button" className={mode === "manual" ? "active" : ""} onClick={() => setMode("manual")}>Manual Entry</button>
+        </div>
       </div>
+      <span>ISC 出勤工时(选择Global Export).</span>
       {mode === "excel" ? (
-        <FilePicker
-          accept=".xlsx,.xls"
-          files={fileName ? [{ name: fileName }] : []}
-          onChange={(files) => {
-            const file = files[0] || null;
-            setFileName(file?.name || "");
-            onFileChange(file);
-          }}
-        />
+        <>
+          <FilePicker
+            accept=".xlsx,.xls"
+            files={fileName ? [{ name: fileName }] : []}
+            onChange={(files) => {
+              const file = files[0] || null;
+              setFileName(file?.name || "");
+              onFileChange(file);
+            }}
+          />
+          {fileName && (
+            <div className="selected-file single-upload-file">
+              <span>{fileName}</span>
+              <button type="button" onClick={clearFile} aria-label={`Remove ${fileName}`}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          )}
+        </>
       ) : (
         <div className="hint-line">Enter Total Hours directly in the Daily Detail table.</div>
       )}
@@ -121,31 +150,50 @@ export function Tabs({ tabs, value, onChange }) {
   );
 }
 
-export function GlassSelect({ value, options, onChange, className = "" }) {
+export function GlassSelect({ value, options, onChange, onRemoveOption, className = "" }) {
   const [open, setOpen] = useState(false);
-  const selected = options.includes(value) ? value : options[0] || "";
+  const normalizedOptions = options.map((option) => (
+    typeof option === "object" ? option : { value: option, label: option }
+  ));
+  const selected = normalizedOptions.find((option) => option.value === value) || normalizedOptions[0] || { value: "", label: "" };
 
   return (
     <div className={`glass-select ${open ? "open" : ""} ${className}`} onBlur={() => setOpen(false)}>
       <button type="button" className="glass-select-trigger" onClick={() => setOpen((current) => !current)}>
-        <span>{selected}</span>
+        <span>{selected.label}</span>
         <span className="glass-select-caret">⌄</span>
       </button>
       {open && (
         <div className="glass-select-menu">
-          {options.map((option) => (
-            <button
-              type="button"
-              key={option}
-              className={option === selected ? "active" : ""}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                onChange(option);
-                setOpen(false);
-              }}
-            >
-              {option}
-            </button>
+          {normalizedOptions.map((option) => (
+            <div key={option.value} className={option.value === selected.value ? "glass-select-option active" : "glass-select-option"}>
+              <button
+                type="button"
+                className="glass-select-option-main"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                {option.label}
+              </button>
+              {onRemoveOption && option.value !== "All People" && (
+                <button
+                  type="button"
+                  className="glass-select-option-remove"
+                  aria-label={`Remove ${option.label}`}
+                  title={`Remove ${option.label}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRemoveOption(option.value);
+                  }}
+                >
+                  <X size={15} />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -157,8 +205,8 @@ export function ChartPanel({ title, caption, children }) {
   return <div className="panel chart-panel"><h2>{title}</h2>{caption && <p className="hint-line">{caption}</p>}{children}</div>;
 }
 
-export function SelectLine({ label, value, options, onChange }) {
-  return <label className="select-line">{label}<GlassSelect value={value} options={options} onChange={onChange} /></label>;
+export function SelectLine({ label, value, options, onChange, onRemoveOption }) {
+  return <label className="select-line">{label}<GlassSelect value={value} options={options} onChange={onChange} onRemoveOption={onRemoveOption} /></label>;
 }
 
 export function ConfirmDialog({ title, message, onCancel, onConfirm }) {

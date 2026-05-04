@@ -63,11 +63,17 @@ export function analyzeWeekly({ volumeFile, iscFile, pickFile }) {
   daily.sort((a, b) => String(a.业务日期).localeCompare(String(b.业务日期)));
   const targetUpph = iscFile ? (TARGET_MAP[warehouseName] || 11.3) : "";
   let personEfficiency = [];
-  if (pickFile) personEfficiency = analyzePickEfficiency(pickFile, iscFile, targetUpph, volumeDates);
+  let pickingGantt = [];
+  if (pickFile) {
+    const pickAnalysis = analyzePickEfficiency(pickFile, iscFile, targetUpph, volumeDates);
+    personEfficiency = pickAnalysis.personEfficiency;
+    pickingGantt = pickAnalysis.pickingGantt;
+  }
   return {
     kpi: { totalOrders: sum(daily, (r) => r.单量), totalUnits: sum(daily, (r) => r.件量), warehouseName, targetUpph },
     daily,
-    personEfficiency
+    personEfficiency,
+    pickingGantt
   };
 }
 
@@ -84,9 +90,10 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
     ]
   });
   const pickStartColumn = firstPresentColumn(pickRows, ["拣货开始时间", "任务领取时间"]);
+  const pickReceiveColumn = firstPresentColumn(pickRows, ["任务领取时间", "拣货开始时间"]);
   const pickQtyColumn = firstPresentColumn(pickRows, ["实际拣货量", "拣货数量", "拣货件数", "件数"]);
   const pickEmployeeColumn = firstPresentColumn(pickRows, ["工号", "员工号"]);
-  const pickTaskColumn = firstPresentColumn(pickRows, ["任务单号", "集合单号"]);
+  const pickTaskColumn = firstPresentColumn(pickRows, ["集合单号", "任务单号"]);
   const pick = pickRows
     .map((r, idx) => {
       const name = String(val(r, "姓名") ?? "").trim();
@@ -95,6 +102,7 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
         ...r,
         拣货完成时间: parseDate(val(r, "拣货完成时间")),
         拣货开始时间: parseDate(val(r, pickStartColumn)),
+        _receive_time: parseDate(val(r, pickReceiveColumn)),
         实际拣货量: num(val(r, pickQtyColumn), 0),
         工号: employeeNo || name,
         姓名: name,
@@ -153,7 +161,7 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
     for (const [key, items] of groupBy(attRows, (r) => `${r.日期}|${r.工号}`)) attMap.set(key, sum(items, (r) => r.考勤时长));
   }
   const nameMap = new Map(pick.map((r) => [r.工号, r.姓名]));
-  return [...qtyMap.keys()].map((key) => {
+  const personEfficiency = [...qtyMap.keys()].map((key) => {
     const [日期, 工号] = key.split("|");
     const 件数 = qtyMap.get(key) || 0;
     const 总件数 = rawMap.get(key) || 0;
@@ -178,4 +186,97 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
       低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : ""
     };
   }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
+  return { personEfficiency, pickingGantt: buildPickingGantt(pick) };
+}
+
+function buildPickingGantt(pick) {
+  const rows = [];
+  for (const [personKey, personRows] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) {
+    const [date, employeeNo] = personKey.split("|");
+    const name = personRows.find((r) => r.姓名)?.姓名 || employeeNo;
+    const taskGroups = [];
+
+    for (const [, group] of groupBy(personRows, (r) => r._task_no || r._row_idx)) {
+      const sorted = [...group].sort((a, b) => (a.拣货完成时间 || 0) - (b.拣货完成时间 || 0));
+      const receive = sorted.map((r) => r._receive_time || r.拣货开始时间).filter(Boolean).sort((a, b) => a - b)[0];
+      const completions = sorted.map((r) => r.拣货完成时间).filter(Boolean);
+      if (!receive || !completions.length) continue;
+
+      let startPick;
+      let endPick;
+      let isBurst = false;
+
+      if (sorted.length === 1) {
+        endPick = completions[0];
+        startPick = new Date(Math.max(receive.getTime(), endPick.getTime() - 2 * 60 * 1000));
+      } else {
+        const counts = new Map();
+        for (const end of completions) {
+          const key = end.getTime();
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+        const [mostCommonEndMs, maxCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (maxCount / sorted.length >= 0.8) {
+          endPick = new Date(Number(mostCommonEndMs));
+          startPick = new Date(endPick.getTime() - sorted.length * 60 * 1000);
+          isBurst = true;
+        } else {
+          startPick = completions.sort((a, b) => a - b)[0];
+          endPick = completions.sort((a, b) => b - a)[0];
+        }
+      }
+
+      if (startPick && endPick && endPick > startPick) {
+        taskGroups.push({ receive, startPick, endPick, isBurst });
+      }
+    }
+
+    const sortedTasks = taskGroups.sort((a, b) => a.startPick - b.startPick);
+    let lunchUsed = false;
+
+    for (let i = 0; i < sortedTasks.length; i++) {
+      const task = sortedTasks[i];
+      const start = i === 0 && task.receive < task.startPick ? task.receive : task.startPick;
+      addPickingGanttRow(rows, { date, employeeNo, name, start, end: task.endPick, type: task.isBurst ? "burst" : "work" });
+
+      const nextTask = sortedTasks[i + 1];
+      if (!nextTask || nextTask.startPick <= task.endPick) continue;
+
+      const idleStart = task.endPick;
+      const idleEnd = nextTask.startPick;
+      const lunchStart = new Date(idleStart);
+      lunchStart.setHours(12, 0, 0, 0);
+      const lunchEnd = new Date(idleStart);
+      lunchEnd.setHours(13, 30, 0, 0);
+      const validStart = new Date(Math.max(idleStart.getTime(), lunchStart.getTime()));
+      const validEnd = new Date(Math.min(idleEnd.getTime(), lunchEnd.getTime()));
+      const validSeconds = (validEnd - validStart) / 1000;
+
+      if (validSeconds >= 1800 && !lunchUsed) {
+        const lunchRealStart = validStart;
+        const lunchRealEnd = new Date(lunchRealStart.getTime() + 30 * 60 * 1000);
+        if (lunchRealStart > idleStart) addPickingGanttRow(rows, { date, employeeNo, name, start: idleStart, end: lunchRealStart, type: "idle" });
+        addPickingGanttRow(rows, { date, employeeNo, name, start: lunchRealStart, end: lunchRealEnd, type: "lunch" });
+        lunchUsed = true;
+        if (idleEnd > lunchRealEnd) addPickingGanttRow(rows, { date, employeeNo, name, start: lunchRealEnd, end: idleEnd, type: "idle" });
+      } else {
+        addPickingGanttRow(rows, { date, employeeNo, name, start: idleStart, end: idleEnd, type: "idle" });
+      }
+    }
+  }
+
+  return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.name).localeCompare(String(b.name)) || new Date(a.start) - new Date(b.start));
+}
+
+function addPickingGanttRow(rows, { date, employeeNo, name, start, end, type }) {
+  if (!start || !end || end <= start) return;
+  rows.push({
+    date,
+    employeeNo,
+    name,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    type,
+    duration: (end - start) / 3600000
+  });
 }

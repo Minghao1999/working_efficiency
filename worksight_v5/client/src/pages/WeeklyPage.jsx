@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Download, RotateCcw } from "lucide-react";
 import { API } from "../constants";
-import { ConfirmDialog, LaborHoursInput, Metric, ProgressBar, SelectLine, UploadBox } from "../components/controls";
+import { LaborHoursInput, Metric, ProgressBar, SelectLine, UploadBox } from "../components/controls";
 import { DailyDetailTable, EditablePersonTable } from "../components/tables";
-import { PersonEfficiencyChart } from "../components/charts";
+import { PersonEfficiencyChart, PickingGanttChart } from "../components/charts";
 import { exportRows } from "../utils/export";
 import { formatUploadError, personDeleteKey } from "../utils/formatters";
 
@@ -18,8 +18,6 @@ export function WeeklyPage() {
   const [personDate, setPersonDate] = useState("");
   const [personName, setPersonName] = useState("All People");
   const [deleted, setDeleted] = useState(new Set());
-  const [markedForDelete, setMarkedForDelete] = useState(new Set());
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [manualHours, setManualHours] = useState({});
   const requestSeq = useRef(0);
 
@@ -56,7 +54,6 @@ export function WeeklyPage() {
         setPersonDate(firstDate);
         setPersonName("All People");
         setDeleted(new Set());
-        setMarkedForDelete(new Set());
       } catch (e) {
         if (e.name !== "AbortError" && seq === requestSeq.current) setError(formatUploadError(e));
       } finally {
@@ -77,39 +74,31 @@ export function WeeklyPage() {
   }, [laborMode]);
 
   const activePersonEfficiency = (data?.personEfficiency || []).filter((r) => !deleted.has(personDeleteKey(r)));
+  const activePickingGantt = (data?.pickingGantt || []).filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
   const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
   const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
   const selectedPersonDate = personDate || personDates[0] || "";
+  const pickingGanttRows = activePickingGantt
+    .filter((r) => personName !== "All People" || !selectedPersonDate || r.date === selectedPersonDate)
+    .filter((r) => personName === "All People" || r.name === personName);
   const personRows = activePersonEfficiency
-    .filter((r) => !selectedPersonDate || r.日期 === selectedPersonDate)
+    .filter((r) => personName !== "All People" || !selectedPersonDate || r.日期 === selectedPersonDate)
     .filter((r) => personName === "All People" || r.姓名 === personName)
     .map((r) => {
-      const id = `${r.日期}|${r.工号}`;
       const { 低于目标, ...row } = r;
-      return { ...row, 删除: markedForDelete.has(id) };
+      return row;
     });
 
-  function applyDeleteSort() {
-    if (!markedForDelete.size) return;
-    setDeleteConfirmOpen(true);
-  }
-
-  function confirmDeletePeople() {
-    const rowsById = new Map((data?.personEfficiency || []).map((row) => [`${row.日期}|${row.工号}`, row]));
+  function removePersonFromFilter(name) {
+    if (!name || name === "All People") return;
     const nextDeleted = new Set(deleted);
-    for (const id of markedForDelete) {
-      const row = rowsById.get(id);
-      if (row) nextDeleted.add(personDeleteKey(row));
-    }
+    nextDeleted.add(name);
     setDeleted(nextDeleted);
-    setMarkedForDelete(new Set());
-    setDeleteConfirmOpen(false);
-    if (personName !== "All People" && [...nextDeleted].includes(personName)) setPersonName("All People");
+    if (personName === name) setPersonName("All People");
   }
 
   function restoreDeletedPeople() {
     setDeleted(new Set());
-    setMarkedForDelete(new Set());
   }
 
   const dailyRows = useMemo(() => {
@@ -173,28 +162,23 @@ export function WeeklyPage() {
                 <h2>Per-Person Daily Picking Efficiency</h2>
                 <div className="button-row">
                   <button className="ghost-btn" disabled={!deleted.size} onClick={restoreDeletedPeople} title="Restore deleted people"><RotateCcw size={16} /> Refresh</button>
-                  <button className="ghost-btn" disabled={!markedForDelete.size} onClick={applyDeleteSort}>Apply Delete</button>
                 </div>
               </div>
               <div className="filter-row">
                 <SelectLine label="Select Date" value={selectedPersonDate} options={personDates} onChange={setPersonDate} />
-                <SelectLine label="Filter Person" value={personName} options={personNames} onChange={setPersonName} />
+                <SelectLine label="Filter Person" value={personName} options={personNames} onChange={setPersonName} onRemoveOption={removePersonFromFilter} />
               </div>
               {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
-              <EditablePersonTable
-                rows={personRows}
-                markedForDelete={markedForDelete}
-                setMarkedForDelete={setMarkedForDelete}
-              />
+              <EditablePersonTable rows={personRows} />
             </div>
           )}
-          {deleteConfirmOpen && (
-            <ConfirmDialog
-              title="Delete selected people?"
-              message={`This will remove ${markedForDelete.size} selected row${markedForDelete.size === 1 ? "" : "s"} from the table and remove those people from the filter.`}
-              onCancel={() => setDeleteConfirmOpen(false)}
-              onConfirm={confirmDeletePeople}
-            />
+          {!!activePickingGantt.length && (
+            <div className="panel">
+              <div className="table-head">
+                <h2>Per-Person Picking Gantt</h2>
+              </div>
+              <PickingGanttChart rows={pickingGanttRows} groupByDate={personName !== "All People"} />
+            </div>
           )}
         </>
       )}

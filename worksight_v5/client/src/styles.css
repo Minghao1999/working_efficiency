@@ -1548,26 +1548,72 @@ textarea,
   -webkit-backdrop-filter: blur(24px) saturate(1.35);
 }
 
-.glass-select-menu button {
+.glass-select-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  border-radius: 8px;
+}
+
+.glass-select-option:hover {
+  background: rgba(134, 174, 232, 0.14);
+}
+
+.glass-select-option.active {
+  background: rgba(16, 32, 51, 0.86);
+  color: #ffffff;
+}
+
+.glass-select-option-main,
+.glass-select-option-remove {
   min-height: 34px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--glass-ink);
-  padding: 0 10px;
   cursor: pointer;
   font-weight: 720;
-  text-align: left;
   transition: background 160ms ease, color 160ms ease;
 }
 
-.glass-select-menu button:hover {
-  background: rgba(134, 174, 232, 0.14);
+.glass-select-option-main {
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.glass-select-menu button.active {
-  background: rgba(16, 32, 51, 0.86);
+.glass-select-option-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  padding: 0;
+  color: #667085;
+}
+
+.glass-select-option.active .glass-select-option-main {
   color: #ffffff;
+}
+
+.glass-select-option.active .glass-select-option-remove {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.glass-select-option-remove:hover {
+  background: rgba(180, 35, 24, 0.1);
+  color: #b42318;
+}
+
+.ws-field .glass-select,
+.warehouse-select {
+  width: 100%;
+}
+
+.single-upload-file {
+  margin-top: 8px;
 }
 
 .ghost-btn:hover,
@@ -1609,6 +1655,69 @@ textarea:focus,
   background: rgba(255, 255, 255, 0.82);
   color: var(--glass-ink);
   box-shadow: 0 8px 18px rgba(40, 61, 98, 0.1);
+}
+
+.upload-box-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.labor-hours-box {
+  align-content: start;
+}
+
+.segmented.compact {
+  min-height: 34px;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 11px;
+  flex: 0 0 auto;
+}
+
+.segmented.compact button {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.segmented.sliding {
+  --active-index: 0;
+  --segment-count: 2;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--segment-count), minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.segmented.sliding::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px - (var(--segment-count) - 1) * 3px) / var(--segment-count));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 8px 18px rgba(40, 61, 98, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  transform: translateX(calc(var(--active-index) * (100% + 3px)));
+  transition: transform 260ms cubic-bezier(0.2, 0.9, 0.18, 1);
+}
+
+.segmented.sliding button {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.segmented.sliding button.active {
+  background: transparent;
+  box-shadow: none;
 }
 
 .chart-strip {
