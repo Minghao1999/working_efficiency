@@ -23,6 +23,8 @@ import { GlassSelect } from "../components/controls";
 import Barcode from "react-barcode";
 
 const NEW_PRODUCT_TOOL_URL = "/downloads/WorkSight-NewProduct-Automation.exe";
+const TRANSFER_TOOL_URL = "/downloads/WorkSight-InventoryTransfer.exe";
+const PICKING_TOOL_URL = "/downloads/WorkSight-GoodsPicking.exe";
 const PICKING_WAREHOUSES = [
   { value: "2", label: "EWR-SM-2-US(C0000002427)" },
   { value: "1", label: "EWR-LG-1-US(C0000000389)" },
@@ -331,327 +333,117 @@ function BarcodeGenerator({ onBack }) {
 }
 
 function AutomaticInventoryTransfer({ onBack }) {
-  const [devices, setDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState("");
-  const [cellA, setCellA] = useState("A1-R1-L1-B1");
-  const [cellB, setCellB] = useState("A1-R1-L1-B2");
-  const [limit, setLimit] = useState("400");
-  const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState([
-    "Ready. Connect Android device and click Refresh Devices."
-  ]);
-
-  function addLog(line) {
-    setLogs((current) => [
-      ...current,
-      `[${new Date().toLocaleTimeString()}] ${line}`
-    ]);
-  }
-
-  function refreshDevices() {
-    // 先不接后端，先做前端假数据
-    const mockDevices = ["USB_DEVICE_001"];
-    setDevices(mockDevices);
-    setSelectedDevice(mockDevices[0]);
-    addLog("Devices refreshed.");
-  }
-
-  function startTransfer() {
-    if (!selectedDevice) {
-      addLog("Please select a device first.");
-      return;
-    }
-
-    if (!cellA.trim() || !cellB.trim()) {
-      addLog("Cell A and Cell B are required.");
-      return;
-    }
-
-    setRunning(true);
-    addLog(`Start relocation loop: ${cellA} → ${cellB}`);
-    addLog(`Loop count: ${limit || "0"} ${limit === "0" ? "(infinite)" : ""}`);
-    addLog("Frontend ready. Backend connection will be added later.");
-  }
-
-  function stopTransfer() {
-    setRunning(false);
-    addLog("Stop requested.");
-  }
-
   return (
-    <div className="panel picking-tool">
+    <div className="panel">
       <div className="tool-head">
         <button className="ghost-btn" onClick={onBack}>
           <ArrowLeft size={16} /> Back
         </button>
-
         <div className="panel-title">
-          <Boxes size={20} />
-          <span>Automatic Inventory Transfer</span>
+          <Repeat size={20} />
+          <span>Inventory Transfer (In-Warehouse)</span>
         </div>
       </div>
 
-      <div className="picking-layout">
-        <div className="automation-card picking-form-card">
+      <div className="automation-download">
+        <div className="download-hero">
+          <Repeat size={40} />
           <div>
-            <h2>Relocation Control</h2>
+            <h2>Download Inventory Transfer Tool</h2>
+            <p>
+              Run the local tool to automatically perform relocation tasks on PDA via ADB.
+            </p>
+          </div>
+          <a className="primary-btn download-btn" href={TRANSFER_TOOL_URL} download>
+            <Download size={18} /> Download EXE
+          </a>
+        </div>
+
+        <div className="automation-layout">
+          <div className="automation-card">
+            <h2>Function</h2>
             <p className="hint-line">
-              In-Warehouse -&gt; change -&gt; Transfer -&gt; Relocation by Cell (Please select English as your iWMS language.)
+              Automatically execute relocation loops between two storage cells.
             </p>
           </div>
 
-          <label className="ws-field">
-            <span>Device</span>
-            <select
-              value={selectedDevice}
-              onChange={(e) => setSelectedDevice(e.target.value)}
-            >
-              <option value="">No device selected</option>
-              {devices.map((device) => (
-                <option key={device} value={device}>
-                  {device}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button className="ghost-btn" onClick={refreshDevices}>
-            Refresh Devices
-          </button>
-
-          <label className="ws-field">
-            <span>Cell A</span>
-            <input
-              value={cellA}
-              onChange={(e) => setCellA(e.target.value)}
-              placeholder="A1-R1-L1-B1"
-            />
-          </label>
-
-          <label className="ws-field">
-            <span>Cell B</span>
-            <input
-              value={cellB}
-              onChange={(e) => setCellB(e.target.value)}
-              placeholder="A1-R1-L1-B2"
-            />
-          </label>
-
-          <label className="ws-field">
-            <span>Loop Count</span>
-            <input
-              type="number"
-              min="0"
-              value={limit}
-              onChange={(e) => setLimit(e.target.value)}
-              placeholder="0 means infinite"
-            />
-          </label>
-
-          <div className="button-row picking-actions">
-            <button
-              className="primary-btn"
-              onClick={startTransfer}
-              disabled={running}
-            >
-              {running ? <Loader2 className="spin-icon" size={18} /> : <CheckCircle2 size={18} />}
-              {running ? "Running" : "Start"}
-            </button>
-
-            <button
-              className="ghost-btn"
-              onClick={stopTransfer}
-              disabled={!running}
-            >
-              Stop
-            </button>
-          </div>
-        </div>
-
-        <div className="picking-result-card active transfer-log-card">
-          <div className="result-status">
-            {running ? <Loader2 className="spin-icon" size={22} /> : <Boxes size={22} />}
-            <span>{running ? "Running Transfer" : "Transfer Console"}</span>
+          <div className="automation-card">
+            <h2>How It Works</h2>
+            <ol className="step-list">
+              <li>Download and run the tool.</li>
+              <li>Connect PDA via USB.</li>
+              <li>Select device and input Cell A / Cell B.</li>
+              <li>Start loop execution.</li>
+            </ol>
           </div>
 
-          <div className="transfer-summary">
-            <strong>{cellA || "-"}</strong>
-            <span>→</span>
-            <strong>{cellB || "-"}</strong>
-          </div>
-
-          <div className="picking-log transfer-log">
-            {logs.map((line, index) => (
-              <div key={`${line}-${index}`}>{line}</div>
-            ))}
+          <div className="automation-card wide">
+            <h2>Note</h2>
+            <p className="hint-line">
+              Requires ADB environment and PDA USB debugging enabled.
+            </p>
           </div>
         </div>
       </div>
     </div>
   );
 }
-
 function GoodsPickingOutbound({ onBack }) {
-  const [devices, setDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState("");
-  const [cellA, setCellA] = useState("A1-R1-L1-B1");
-  const [cellB, setCellB] = useState("A1-R1-L1-B2");
-  const [limit, setLimit] = useState("400");
-  const [running, setRunning] = useState(false);
-  const [logs, setLogs] = useState([
-    "Ready. Connect Android device and click Refresh Devices."
-  ]);
-
-  function addLog(line) {
-    setLogs((current) => [
-      ...current,
-      `[${new Date().toLocaleTimeString()}] ${line}`
-    ]);
-  }
-
-  function refreshDevices() {
-    // 先不接后端，先做前端假数据
-    const mockDevices = ["USB_DEVICE_001"];
-    setDevices(mockDevices);
-    setSelectedDevice(mockDevices[0]);
-    addLog("Devices refreshed.");
-  }
-
-  function startTransfer() {
-    if (!selectedDevice) {
-      addLog("Please select a device first.");
-      return;
-    }
-
-    if (!cellA.trim() || !cellB.trim()) {
-      addLog("Cell A and Cell B are required.");
-      return;
-    }
-
-    setRunning(true);
-    addLog(`Start relocation loop: ${cellA} → ${cellB}`);
-    addLog(`Loop count: ${limit || "0"} ${limit === "0" ? "(infinite)" : ""}`);
-    addLog("Frontend ready. Backend connection will be added later.");
-  }
-
-  function stopTransfer() {
-    setRunning(false);
-    addLog("Stop requested.");
-  }
-
   return (
-    <div className="panel picking-tool">
+    <div className="panel">
       <div className="tool-head">
         <button className="ghost-btn" onClick={onBack}>
           <ArrowLeft size={16} /> Back
         </button>
-
         <div className="panel-title">
-          <Boxes size={20} />
+          <ClipboardList size={20} />
           <span>Goods Picking for Outbound</span>
         </div>
       </div>
 
-      <div className="picking-layout">
-        <div className="automation-card picking-form-card">
+      <div className="automation-download">
+        <div className="download-hero">
+          <ClipboardList size={40} />
           <div>
-            <h2>Picking Automation Control</h2>
+            <h2>Download Picking Automation Tool</h2>
+            <p>
+              Run the local tool to automate outbound picking operations on PDA.
+            </p>
+          </div>
+          <a className="primary-btn download-btn" href={PICKING_TOOL_URL} download>
+            <Download size={18} /> Download EXE
+          </a>
+        </div>
+
+        <div className="automation-layout">
+          <div className="automation-card">
+            <h2>Function</h2>
             <p className="hint-line">
-              Outbound -&gt; Pick -&gt; Goods Pick -&gt; Scan Order Number(Please select English as your iWMS language.)
+              Automatically process outbound picking tasks and scan orders.
             </p>
           </div>
 
-          <label className="ws-field">
-            <span>Device</span>
-            <select
-              value={selectedDevice}
-              onChange={(e) => setSelectedDevice(e.target.value)}
-            >
-              <option value="">No device selected</option>
-              {devices.map((device) => (
-                <option key={device} value={device}>
-                  {device}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button className="ghost-btn" onClick={refreshDevices}>
-            Refresh Devices
-          </button>
-
-          <label className="ws-field">
-            <span>Cell A</span>
-            <input
-              value={cellA}
-              onChange={(e) => setCellA(e.target.value)}
-              placeholder="A1-R1-L1-B1"
-            />
-          </label>
-
-          <label className="ws-field">
-            <span>Cell B</span>
-            <input
-              value={cellB}
-              onChange={(e) => setCellB(e.target.value)}
-              placeholder="A1-R1-L1-B2"
-            />
-          </label>
-
-          <label className="ws-field">
-            <span>Loop Count</span>
-            <input
-              type="number"
-              min="0"
-              value={limit}
-              onChange={(e) => setLimit(e.target.value)}
-              placeholder="0 means infinite"
-            />
-          </label>
-
-          <div className="button-row picking-actions">
-            <button
-              className="primary-btn"
-              onClick={startTransfer}
-              disabled={running}
-            >
-              {running ? <Loader2 className="spin-icon" size={18} /> : <CheckCircle2 size={18} />}
-              {running ? "Running" : "Start"}
-            </button>
-
-            <button
-              className="ghost-btn"
-              onClick={stopTransfer}
-              disabled={!running}
-            >
-              Stop
-            </button>
-          </div>
-        </div>
-
-        <div className="picking-result-card active transfer-log-card">
-          <div className="result-status">
-            {running ? <Loader2 className="spin-icon" size={22} /> : <Boxes size={22} />}
-            <span>{running ? "Running Transfer" : "Transfer Console"}</span>
+          <div className="automation-card">
+            <h2>How It Works</h2>
+            <ol className="step-list">
+              <li>Download and run the tool.</li>
+              <li>Connect PDA via USB.</li>
+              <li>Login iWMS (English mode).</li>
+              <li>Start picking automation.</li>
+            </ol>
           </div>
 
-          <div className="transfer-summary">
-            <strong>{cellA || "-"}</strong>
-            <span>→</span>
-            <strong>{cellB || "-"}</strong>
-          </div>
-
-          <div className="picking-log transfer-log">
-            {logs.map((line, index) => (
-              <div key={`${line}-${index}`}>{line}</div>
-            ))}
+          <div className="automation-card wide">
+            <h2>Note</h2>
+            <p className="hint-line">
+              Ensure PDA is connected and debugging mode is enabled.
+            </p>
           </div>
         </div>
       </div>
     </div>
   );
 }
-
 
 function NewProductTool({ onBack }) {
   return (
