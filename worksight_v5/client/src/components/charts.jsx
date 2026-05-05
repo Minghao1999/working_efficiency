@@ -230,3 +230,102 @@ export function PersonEfficiencyChart({ rows, personName }) {
     </div>
   );
 }
+
+export function PickingGanttChart({ rows, groupByDate = false }) {
+  const chartRows = (rows || []).filter((row) => row.start && row.end);
+  if (!chartRows.length) return <div className="empty">No picking timeline data for this filter.</div>;
+  const axisBase = (value) => groupByDate ? hourValue(value) : new Date(value);
+  const axisWidth = (row) => groupByDate ? Math.max(0, hourValue(row.end) - hourValue(row.start)) : new Date(row.end) - new Date(row.start);
+
+  const axisKey = (row) => groupByDate ? shortDateLabel(row.date) : (row.name || row.employeeNo || "");
+  const idleByAxis = chartRows.reduce((acc, row) => {
+    const name = axisKey(row);
+    if (!acc[name]) acc[name] = 0;
+    if (row.type === "idle") acc[name] += Number(row.duration) || 0;
+    return acc;
+  }, {});
+  const names = [...new Set(chartRows.map(axisKey))]
+    .filter(Boolean)
+    .sort((a, b) => groupByDate ? String(a).localeCompare(String(b)) : (idleByAxis[a] || 0) - (idleByAxis[b] || 0) || String(a).localeCompare(String(b)));
+
+  const typeMeta = {
+    work: { label: "Work", color: "#86AEE8", border: "#7899C8" },
+    idle: { label: "Idle", color: "#D9B56D", border: "#C8A15A" },
+    burst: { label: "Burst", color: "#5C667A", border: "#4B5567" },
+    lunch: { label: "Lunch", color: "#DDEAF7", border: "#8AA4C2" }
+  };
+
+  const traces = Object.entries(typeMeta).map(([type, meta]) => {
+    const items = chartRows.filter((row) => row.type === type);
+    return {
+      type: "bar",
+      orientation: "h",
+      name: meta.label,
+      y: items.map(axisKey),
+      x: items.map(axisWidth),
+      base: items.map((row) => axisBase(row.start)),
+      marker: {
+        color: meta.color,
+        line: { color: meta.border, width: type === "lunch" ? 1 : 0 }
+      },
+      customdata: items.map((row) => [meta.label, row.name, row.employeeNo, row.date, timeOf(row.start), timeOf(row.end), Number(row.duration) || 0, idleByAxis[axisKey(row)] || 0]),
+      hoverlabel: HOVER_LABEL,
+      hovertemplate:
+        "type: %{customdata[0]}<br>" +
+        "name: %{customdata[1]}<br>" +
+        "employee: %{customdata[2]}<br>" +
+        "date: %{customdata[3]}<br>" +
+        "start: %{customdata[4]}<br>" +
+        "end: %{customdata[5]}<br>" +
+        "duration: %{customdata[6]:.2f}h<br>" +
+        "idle total: %{customdata[7]:.2f}h<extra></extra>"
+    };
+  }).filter((trace) => trace.y.length);
+
+  const annotations = names.map((name) => ({
+    x: 1.01,
+    y: name,
+    xref: "paper",
+    yref: "y",
+    text: `${(idleByAxis[name] || 0).toFixed(2)} h`,
+    showarrow: false,
+    xanchor: "left",
+    font: { size: 11, color: "#B42318" }
+  }));
+
+  return (
+    <div className="chart-strip picking-gantt-chart">
+      <Plot
+        data={traces}
+        layout={{
+          barmode: "stack",
+          height: Math.max(420, names.length * 34 + 110),
+          margin: { l: 160, r: 140, t: 18, b: 46 },
+          plot_bgcolor: "white",
+          paper_bgcolor: "white",
+          hoverlabel: HOVER_LABEL,
+          yaxis: { autorange: "reversed", categoryorder: "array", categoryarray: names, automargin: true },
+          xaxis: groupByDate
+            ? { title: "Time", type: "linear", range: [8, 17], tickvals: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17], ticktext: ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"] }
+            : { title: "Time", type: "date", tickformat: "%H:%M" },
+          legend: { orientation: "h", x: 0, y: 1.12 },
+          annotations
+        }}
+        config={{ responsive: true, displayModeBar: false }}
+        useResizeHandler
+        style={{ width: "100%" }}
+      />
+    </div>
+  );
+}
+
+function hourValue(value) {
+  const date = new Date(value);
+  return date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
+}
+
+function shortDateLabel(value) {
+  const date = new Date(`${value}T00:00:00`);
+  if (!Number.isFinite(date.getTime())) return String(value || "");
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}

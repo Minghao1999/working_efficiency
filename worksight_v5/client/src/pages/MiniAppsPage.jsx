@@ -14,6 +14,7 @@ import {
   TriangleAlert
 } from "lucide-react";
 import { API } from "../constants";
+import { GlassSelect } from "../components/controls";
 
 const NEW_PRODUCT_TOOL_URL = "/downloads/WorkSight-NewProduct-Automation.exe";
 const PICKING_WAREHOUSES = [
@@ -109,13 +110,7 @@ function PickingExceptionTool({ onBack }) {
 
           <label className="ws-field">
             <span>Warehouse</span>
-            <select value={warehouse} onChange={(event) => setWarehouse(event.target.value)}>
-              {PICKING_WAREHOUSES.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+            <GlassSelect value={warehouse} options={PICKING_WAREHOUSES} onChange={setWarehouse} className="warehouse-select" />
           </label>
 
           <label className="ws-field">
