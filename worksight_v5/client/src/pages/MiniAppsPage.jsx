@@ -10,7 +10,12 @@ import {
   Loader2,
   ScanBarcode,
   Search,
+  Package,
   Sparkles,
+  Truck,
+  ClipboardList,
+  Warehouse,
+  Repeat,
   TriangleAlert
 } from "lucide-react";
 import { API } from "../constants";
@@ -725,17 +730,17 @@ export function MiniAppsPage() {
             <p>New product maintenance automation</p>
           </button>
           <button className="feature-tile" onClick={() => setActiveTool("barcode")}>
-            <ScanBarcode size={32} />
+            <Package size={32} />
             <h2>Barcode Generator</h2>
             <p>Generate barcode from input</p>
           </button>
           <button className="feature-tile" onClick={() => setActiveTool("goods-picking")}>
-            <ScanBarcode size={32} />
+            <ClipboardList size={32} />
             <h2>Goods Picking for Outbound</h2>
             <p>PDA automatic data processing</p>
           </button>
           <button className="feature-tile" onClick={() => setActiveTool("automatic-transfer")}>
-            <Boxes size={32} />
+            <Repeat size={32} />
             <h2>Inventory transfer For In-Warehouse</h2>
             <p>PDA automatic data processing</p>
           </button>
