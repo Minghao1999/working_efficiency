@@ -1,5 +1,6 @@
 import { dayKey, num, parseDate, sum } from "../utils/helpers.js";
 import { getDb } from "./mongo.js";
+import { analyzePickRows } from "./weeklyService.js";
 
 const WMS_URL = "https://iwms.us.jdlglobal.com/reportApi/services/smartQueryWS?wsdl";
 
@@ -147,6 +148,13 @@ async function unitCacheCollection() {
   return collection;
 }
 
+async function pickingCacheCollection() {
+  const db = await getDb();
+  const collection = db.collection("weekly_picking_daily_cache");
+  await collection.createIndex({ warehouseKey: 1, businessDate: 1 }, { unique: true });
+  return collection;
+}
+
 async function readCachedDaily({ warehouseKey, dates }) {
   const collection = await unitCacheCollection();
   const docs = await collection
@@ -206,6 +214,66 @@ function dailyFromCachedDocs(dates, byDate) {
     .filter((row) => row.单量 || row.件量);
 }
 
+async function readCachedPickingRows({ warehouseKey, dates }) {
+  const collection = await pickingCacheCollection();
+  const docs = await collection
+    .find({ warehouseKey, businessDate: { $in: dates } })
+    .project({ _id: 0, businessDate: 1, rows: 1, status: 1 })
+    .toArray();
+  const byDate = new Map(
+    docs
+      .filter((doc) => doc.status === "final" || (!doc.status && cacheStatusForDate(doc.businessDate) === "final"))
+      .map((doc) => [doc.businessDate, doc])
+  );
+  return {
+    rows: dates.flatMap((date) => byDate.get(date)?.rows || []),
+    byDate,
+    missingDates: dates.filter((date) => !byDate.has(date))
+  };
+}
+
+function groupPickingRowsByDate(rows) {
+  const byDate = new Map();
+  for (const row of rows || []) {
+    const date = dayKey(parseDate(row.拣货完成时间));
+    if (!date) continue;
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push(row);
+  }
+  return byDate;
+}
+
+async function writeCachedPickingRows({ warehouseKey, warehouseNo, dates, rows }) {
+  const collection = await pickingCacheCollection();
+  const rowsByDate = groupPickingRowsByDate(rows);
+  const now = new Date();
+  const writableDates = dates.filter((date) => cacheStatusForDate(date) !== "skip");
+  if (!writableDates.length) return;
+
+  await collection.bulkWrite(
+    writableDates.map((date) => {
+      const status = cacheStatusForDate(date);
+      return {
+        updateOne: {
+          filter: { warehouseKey, businessDate: date },
+          update: {
+            $set: {
+              warehouseKey,
+              warehouseNo,
+              businessDate: date,
+              rows: rowsByDate.get(date) || [],
+              status,
+              updatedAt: now
+            },
+            $setOnInsert: { createdAt: now }
+          },
+          upsert: true
+        }
+      };
+    })
+  );
+}
+
 function buildUnitQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize = 1000 }) {
   const { startTime, endTime } = normalizeDateRange(from, to);
   const arg0 = {
@@ -228,6 +296,40 @@ function buildUnitQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize =
         Compare: 9,
         FieldId: "RTM.S10_TIME",
         FieldName: "packingCompletionTime",
+        Location: ""
+      }
+    ],
+    PageSize: pageSize,
+    CurrentPage: currentPage,
+    orgNo: process.env.WMS_ORG_NO || "1",
+    distributeNo: process.env.WMS_DISTRIBUTE_NO || "1",
+    warehouseNo
+  };
+  return buildSoapEnvelope(arg0, arg1);
+}
+
+function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize = 1000 }) {
+  const { startTime, endTime } = normalizeDateRange(from, to);
+  const arg0 = {
+    bizType: "queryReportByCondition",
+    uuid: "1",
+    callCode: "360BUY.WMS3.WS.CALLCODE.10401"
+  };
+  const arg1 = {
+    Id: "wms_picking_data_v2",
+    Name: "pickingResultsOfQuery",
+    WkNo: process.env.WMS_WK_NO || DEFAULT_WMS_WK_NO,
+    UserName: process.env.WMS_USER_NAME || DEFAULT_WMS_USER,
+    ReportModelId: "",
+    SqlLimit: "5000",
+    ListSqlOrder: [],
+    ListSqlWhere: [
+      {
+        FirstValue: startTime,
+        SecondValue: endTime,
+        Compare: 9,
+        FieldId: "UPDATE_TIME",
+        FieldName: "pickingDate",
         Location: ""
       }
     ],
@@ -354,6 +456,75 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
       targetUpph: TARGET_UPPH_BY_WAREHOUSE[warehouseKey] || ""
     },
     daily,
+    rawCount: rows.length,
+    source: cacheStatus.enabled && cached.byDate.size ? "mixed" : "wms",
+    cacheStatus
+  };
+}
+
+function normalizePickingRows(rows) {
+  return (rows || []).map((row) => ({
+    拣货完成时间: row.updateTime,
+    拣货开始时间: row.fetchTime,
+    任务领取时间: row.fetchTime,
+    实际拣货量: row.pickingQty ?? row.GOODS_SUM ?? row.locateQty ?? 0,
+    工号: row.employeeNo || row.email || row.workerName,
+    员工号: row.employeeNo || row.email || row.workerName,
+    姓名: row.workerName || row.updateUser || row.employeeNo || "",
+    集合单号: row.taskPageNo || row.outboundNo || row.waveNo || row.batchNo,
+    任务单号: row.taskPageNo || row.outboundNo || row.waveNo || row.batchNo,
+    储位: row.cellNo || row.containerNo || row.goodsNo || row.outboundNo
+  }));
+}
+
+export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, targetUpph = "" } = {}) {
+  const warehouseKey = String(warehouse || "5").trim();
+  const cleanWarehouseNo = resolveWarehouseNo(warehouse, warehouseNo);
+  const { startDate, endDate } = normalizeDateRange(from, to);
+  const requestedDates = dateKeysBetween(startDate, endDate);
+  let cacheStatus = { enabled: true };
+  let cached = { rows: [], byDate: new Map(), missingDates: requestedDates };
+
+  try {
+    cached = await readCachedPickingRows({ warehouseKey, dates: requestedDates });
+  } catch (error) {
+    cacheStatus = { enabled: false, error: error.message };
+  }
+
+  if (cacheStatus.enabled && !cached.missingDates.length) {
+    const analysis = analyzePickRows(cached.rows, null, Number(targetUpph) || "", []);
+    return {
+      ...analysis,
+      rawCount: cached.rows.length,
+      source: "cache",
+      cacheStatus
+    };
+  }
+
+  const pageSize = 1000;
+  const rows = [];
+  const maxPages = 50;
+
+  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
+    const result = await postWms(buildPickingQueryBody({ from, to, warehouseNo: cleanWarehouseNo, currentPage, pageSize }), cleanWarehouseNo);
+    const pageRows = getRows(result);
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+
+  const normalizedRows = normalizePickingRows(rows);
+
+  if (cacheStatus.enabled) {
+    try {
+      await writeCachedPickingRows({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: requestedDates, rows: normalizedRows });
+    } catch (error) {
+      cacheStatus = { enabled: false, error: error.message };
+    }
+  }
+
+  const analysis = analyzePickRows(normalizedRows, null, Number(targetUpph) || "", []);
+  return {
+    ...analysis,
     rawCount: rows.length,
     source: cacheStatus.enabled && cached.byDate.size ? "mixed" : "wms",
     cacheStatus

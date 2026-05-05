@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { analyzeWeekly } from "../services/weeklyService.js";
-import { queryUnitData } from "../services/weeklyWmsService.js";
+import { queryPickingData, queryUnitData } from "../services/weeklyWmsService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -23,6 +23,15 @@ router.post("/query-unit", async (req, res) => {
   try {
     const { from, to, warehouse, warehouseNo } = req.body || {};
     res.json(await queryUnitData({ from, to, warehouse, warehouseNo }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/query-picking", async (req, res) => {
+  try {
+    const { from, to, warehouse, warehouseNo, targetUpph } = req.body || {};
+    res.json(await queryPickingData({ from, to, warehouse, warehouseNo, targetUpph }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }

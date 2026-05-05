@@ -145,6 +145,35 @@ export function WeeklyPage() {
     }
   }
 
+  async function queryPickingData() {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/weekly/query-picking`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: pickRange.from, to: pickRange.to, warehouse, targetUpph })
+      });
+      const json = await res.json();
+      if (!res.ok) throw json;
+      setData((current) => ({
+        ...(current || {}),
+        personEfficiency: json.personEfficiency || [],
+        pickingGantt: json.pickingGantt || [],
+        daily: current?.daily || [],
+        kpi: current?.kpi || { totalOrders: 0, totalUnits: 0, targetUpph }
+      }));
+      const firstDate = [...new Set((json.personEfficiency || []).map((r) => r.日期).filter(Boolean))][0] || "";
+      setPersonDate(firstDate);
+      setPersonName("All People");
+      setDeleted(new Set());
+    } catch (e) {
+      setError(formatUploadError(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const dailyRows = useMemo(() => {
     if (!data?.daily) return [];
     if (laborMode !== "manual") return data.daily;
@@ -186,7 +215,7 @@ export function WeeklyPage() {
           title="Upload Picking Data"
           caption="iWMS 拣货结果查询"
           onChange={setPick}
-          actionSlot={<DateRangeQuery value={pickRange} onChange={setPickRange} />}
+          actionSlot={<DateRangeQuery value={pickRange} onChange={setPickRange} onQuery={queryPickingData} disabled={loading || !pickRange.from || !pickRange.to} />}
         />
       </div>
       {loading && <ProgressBar value={72} label="Analyzing uploaded files..." />}

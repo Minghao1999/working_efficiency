@@ -100,6 +100,10 @@ function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []
       ["实际拣货量", "拣货数量", "拣货件数", "件数"]
     ]
   });
+  return analyzePickRows(pickRows, iscFile, targetUpph, fallbackDates);
+}
+
+export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallbackDates = []) {
   const pickStartColumn = firstPresentColumn(pickRows, ["拣货开始时间", "任务领取时间"]);
   const pickReceiveColumn = firstPresentColumn(pickRows, ["任务领取时间", "拣货开始时间"]);
   const pickQtyColumn = firstPresentColumn(pickRows, ["实际拣货量", "拣货数量", "拣货件数", "件数"]);
