@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { API } from "../constants";
 import { GlassSelect } from "../components/controls";
+import Barcode from "react-barcode";
 
 const NEW_PRODUCT_TOOL_URL = "/downloads/WorkSight-NewProduct-Automation.exe";
 const PICKING_WAREHOUSES = [
@@ -206,6 +207,447 @@ function PickingExceptionTool({ onBack }) {
   );
 }
 
+function BarcodeGenerator({ onBack }) {
+  const [value, setValue] = useState("");
+  const barcodeRef = useRef(null);
+
+  function downloadBarcode() {
+  const svg = barcodeRef.current?.querySelector("svg");
+  if (!svg) return;
+
+  const serializer = new XMLSerializer();
+  const svgString = serializer.serializeToString(svg);
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const img = new Image();
+  img.onload = function () {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+
+    const link = document.createElement("a");
+    link.download = `${value || "barcode"}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
+  img.src = "data:image/svg+xml;base64," + btoa(svgString);
+}
+
+  return (
+    <div className="panel">
+      <div className="tool-head">
+        <button className="ghost-btn" onClick={onBack}>
+          <ArrowLeft size={16} /> Back
+        </button>
+
+        <div className="panel-title">
+          <ScanBarcode size={20} />
+          <span>Barcode Generator</span>
+        </div>
+      </div>
+
+      <div className="picking-layout">
+  
+        {/* 左边：操作区 */}
+        <div className="automation-card picking-form-card">
+          <div>
+            <h2>Generate Barcode</h2>
+            <p className="hint-line">
+              Enter a barcode or location code to generate a label.
+            </p>
+          </div>
+
+          <label className="ws-field">
+            <span>Input Number / Barcode</span>
+
+            <input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          </label>
+
+          <div className="button-row picking-actions">
+            <button
+              className="primary-btn"
+              onClick={downloadBarcode}
+              disabled={!value}
+            >
+              <Download size={18} />
+              Download PNG
+            </button>
+
+            <button
+              className="ghost-btn"
+              onClick={() =>
+                alert("🚧 Batch import is under development.\nPlease leave a request in Feedback.")
+              }
+            >
+              Batch Import
+            </button>
+          </div>
+        </div>
+
+        {/* 右边：结果区 */}
+        <div className={value ? "picking-result-card active" : "picking-result-card"}>
+          
+          {!value && (
+            <div className="empty-state">
+              <ScanBarcode size={34} />
+              <strong>Ready to generate</strong>
+              <span>The barcode will appear here.</span>
+            </div>
+          )}
+
+          {value && (
+            <>
+              <div className="result-status">
+                <CheckCircle2 size={22} />
+                <span>Generated Barcode</span>
+              </div>
+
+              <div ref={barcodeRef} style={{ textAlign: "center" }}>
+                <Barcode
+                  value={value}
+                  width={2.2}
+                  height={140}
+                  fontSize={16}
+                />
+              </div>
+            </>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AutomaticInventoryTransfer({ onBack }) {
+  const [devices, setDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState("");
+  const [cellA, setCellA] = useState("A1-R1-L1-B1");
+  const [cellB, setCellB] = useState("A1-R1-L1-B2");
+  const [limit, setLimit] = useState("400");
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState([
+    "Ready. Connect Android device and click Refresh Devices."
+  ]);
+
+  function addLog(line) {
+    setLogs((current) => [
+      ...current,
+      `[${new Date().toLocaleTimeString()}] ${line}`
+    ]);
+  }
+
+  function refreshDevices() {
+    // 先不接后端，先做前端假数据
+    const mockDevices = ["USB_DEVICE_001"];
+    setDevices(mockDevices);
+    setSelectedDevice(mockDevices[0]);
+    addLog("Devices refreshed.");
+  }
+
+  function startTransfer() {
+    if (!selectedDevice) {
+      addLog("Please select a device first.");
+      return;
+    }
+
+    if (!cellA.trim() || !cellB.trim()) {
+      addLog("Cell A and Cell B are required.");
+      return;
+    }
+
+    setRunning(true);
+    addLog(`Start relocation loop: ${cellA} → ${cellB}`);
+    addLog(`Loop count: ${limit || "0"} ${limit === "0" ? "(infinite)" : ""}`);
+    addLog("Frontend ready. Backend connection will be added later.");
+  }
+
+  function stopTransfer() {
+    setRunning(false);
+    addLog("Stop requested.");
+  }
+
+  return (
+    <div className="panel picking-tool">
+      <div className="tool-head">
+        <button className="ghost-btn" onClick={onBack}>
+          <ArrowLeft size={16} /> Back
+        </button>
+
+        <div className="panel-title">
+          <Boxes size={20} />
+          <span>Automatic Inventory Transfer</span>
+        </div>
+      </div>
+
+      <div className="picking-layout">
+        <div className="automation-card picking-form-card">
+          <div>
+            <h2>Relocation Control</h2>
+            <p className="hint-line">
+              In-Warehouse -&gt; change -&gt; Transfer -&gt; Relocation by Cell (Please select English as your iWMS language.)
+            </p>
+          </div>
+
+          <label className="ws-field">
+            <span>Device</span>
+            <select
+              value={selectedDevice}
+              onChange={(e) => setSelectedDevice(e.target.value)}
+            >
+              <option value="">No device selected</option>
+              {devices.map((device) => (
+                <option key={device} value={device}>
+                  {device}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button className="ghost-btn" onClick={refreshDevices}>
+            Refresh Devices
+          </button>
+
+          <label className="ws-field">
+            <span>Cell A</span>
+            <input
+              value={cellA}
+              onChange={(e) => setCellA(e.target.value)}
+              placeholder="A1-R1-L1-B1"
+            />
+          </label>
+
+          <label className="ws-field">
+            <span>Cell B</span>
+            <input
+              value={cellB}
+              onChange={(e) => setCellB(e.target.value)}
+              placeholder="A1-R1-L1-B2"
+            />
+          </label>
+
+          <label className="ws-field">
+            <span>Loop Count</span>
+            <input
+              type="number"
+              min="0"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="0 means infinite"
+            />
+          </label>
+
+          <div className="button-row picking-actions">
+            <button
+              className="primary-btn"
+              onClick={startTransfer}
+              disabled={running}
+            >
+              {running ? <Loader2 className="spin-icon" size={18} /> : <CheckCircle2 size={18} />}
+              {running ? "Running" : "Start"}
+            </button>
+
+            <button
+              className="ghost-btn"
+              onClick={stopTransfer}
+              disabled={!running}
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <div className="picking-result-card active transfer-log-card">
+          <div className="result-status">
+            {running ? <Loader2 className="spin-icon" size={22} /> : <Boxes size={22} />}
+            <span>{running ? "Running Transfer" : "Transfer Console"}</span>
+          </div>
+
+          <div className="transfer-summary">
+            <strong>{cellA || "-"}</strong>
+            <span>→</span>
+            <strong>{cellB || "-"}</strong>
+          </div>
+
+          <div className="picking-log transfer-log">
+            {logs.map((line, index) => (
+              <div key={`${line}-${index}`}>{line}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoodsPickingOutbound({ onBack }) {
+  const [devices, setDevices] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState("");
+  const [cellA, setCellA] = useState("A1-R1-L1-B1");
+  const [cellB, setCellB] = useState("A1-R1-L1-B2");
+  const [limit, setLimit] = useState("400");
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState([
+    "Ready. Connect Android device and click Refresh Devices."
+  ]);
+
+  function addLog(line) {
+    setLogs((current) => [
+      ...current,
+      `[${new Date().toLocaleTimeString()}] ${line}`
+    ]);
+  }
+
+  function refreshDevices() {
+    // 先不接后端，先做前端假数据
+    const mockDevices = ["USB_DEVICE_001"];
+    setDevices(mockDevices);
+    setSelectedDevice(mockDevices[0]);
+    addLog("Devices refreshed.");
+  }
+
+  function startTransfer() {
+    if (!selectedDevice) {
+      addLog("Please select a device first.");
+      return;
+    }
+
+    if (!cellA.trim() || !cellB.trim()) {
+      addLog("Cell A and Cell B are required.");
+      return;
+    }
+
+    setRunning(true);
+    addLog(`Start relocation loop: ${cellA} → ${cellB}`);
+    addLog(`Loop count: ${limit || "0"} ${limit === "0" ? "(infinite)" : ""}`);
+    addLog("Frontend ready. Backend connection will be added later.");
+  }
+
+  function stopTransfer() {
+    setRunning(false);
+    addLog("Stop requested.");
+  }
+
+  return (
+    <div className="panel picking-tool">
+      <div className="tool-head">
+        <button className="ghost-btn" onClick={onBack}>
+          <ArrowLeft size={16} /> Back
+        </button>
+
+        <div className="panel-title">
+          <Boxes size={20} />
+          <span>Goods Picking for Outbound</span>
+        </div>
+      </div>
+
+      <div className="picking-layout">
+        <div className="automation-card picking-form-card">
+          <div>
+            <h2>Picking Automation Control</h2>
+            <p className="hint-line">
+              Outbound -&gt; Pick -&gt; Goods Pick -&gt; Scan Order Number(Please select English as your iWMS language.)
+            </p>
+          </div>
+
+          <label className="ws-field">
+            <span>Device</span>
+            <select
+              value={selectedDevice}
+              onChange={(e) => setSelectedDevice(e.target.value)}
+            >
+              <option value="">No device selected</option>
+              {devices.map((device) => (
+                <option key={device} value={device}>
+                  {device}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button className="ghost-btn" onClick={refreshDevices}>
+            Refresh Devices
+          </button>
+
+          <label className="ws-field">
+            <span>Cell A</span>
+            <input
+              value={cellA}
+              onChange={(e) => setCellA(e.target.value)}
+              placeholder="A1-R1-L1-B1"
+            />
+          </label>
+
+          <label className="ws-field">
+            <span>Cell B</span>
+            <input
+              value={cellB}
+              onChange={(e) => setCellB(e.target.value)}
+              placeholder="A1-R1-L1-B2"
+            />
+          </label>
+
+          <label className="ws-field">
+            <span>Loop Count</span>
+            <input
+              type="number"
+              min="0"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="0 means infinite"
+            />
+          </label>
+
+          <div className="button-row picking-actions">
+            <button
+              className="primary-btn"
+              onClick={startTransfer}
+              disabled={running}
+            >
+              {running ? <Loader2 className="spin-icon" size={18} /> : <CheckCircle2 size={18} />}
+              {running ? "Running" : "Start"}
+            </button>
+
+            <button
+              className="ghost-btn"
+              onClick={stopTransfer}
+              disabled={!running}
+            >
+              Stop
+            </button>
+          </div>
+        </div>
+
+        <div className="picking-result-card active transfer-log-card">
+          <div className="result-status">
+            {running ? <Loader2 className="spin-icon" size={22} /> : <Boxes size={22} />}
+            <span>{running ? "Running Transfer" : "Transfer Console"}</span>
+          </div>
+
+          <div className="transfer-summary">
+            <strong>{cellA || "-"}</strong>
+            <span>→</span>
+            <strong>{cellB || "-"}</strong>
+          </div>
+
+          <div className="picking-log transfer-log">
+            {logs.map((line, index) => (
+              <div key={`${line}-${index}`}>{line}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function NewProductTool({ onBack }) {
   return (
     <div className="panel">
@@ -282,7 +724,22 @@ export function MiniAppsPage() {
             <h2>New Product Maintenance</h2>
             <p>New product maintenance automation</p>
           </button>
-          {["Inventory Helper", "Label Tool", "Exception Tracker", "Batch Update"].map((name) => (
+          <button className="feature-tile" onClick={() => setActiveTool("barcode")}>
+            <ScanBarcode size={32} />
+            <h2>Barcode Generator</h2>
+            <p>Generate barcode from input</p>
+          </button>
+          <button className="feature-tile" onClick={() => setActiveTool("goods-picking")}>
+            <ScanBarcode size={32} />
+            <h2>Goods Picking for Outbound</h2>
+            <p>PDA automatic data processing</p>
+          </button>
+          <button className="feature-tile" onClick={() => setActiveTool("automatic-transfer")}>
+            <Boxes size={32} />
+            <h2>Inventory transfer For In-Warehouse</h2>
+            <p>PDA automatic data processing</p>
+          </button>
+          {["Batch Update"].map((name) => (
             <button className="feature-tile coming-soon-tile" key={name} disabled>
               <Sparkles size={32} />
               <h2>{name}</h2>
@@ -294,6 +751,13 @@ export function MiniAppsPage() {
 
       {activeTool === "picking-exception" && <PickingExceptionTool onBack={() => setActiveTool("")} />}
       {activeTool === "new-product-maintenance" && <NewProductTool onBack={() => setActiveTool("")} />}
+      {activeTool === "barcode" && <BarcodeGenerator onBack={() => setActiveTool("")} />}
+      {activeTool === "automatic-transfer" && (
+        <AutomaticInventoryTransfer onBack={() => setActiveTool("")} />
+      )}
+      {activeTool === "goods-picking" && (
+        <GoodsPickingOutbound onBack={() => setActiveTool("")} />
+      )}
     </section>
   );
 }
