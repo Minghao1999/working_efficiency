@@ -69,7 +69,8 @@ export function EditablePersonTable({ rows, markedForDelete = new Set(), setMark
   if (!rows.length) return <div className="empty">No data</div>;
   const sorted = sortRows(rows, sort);
   const hidden = new Set(hiddenColumns);
-  const keys = Object.keys(sorted[0]).filter((key) => !key.startsWith("_") && !hidden.has(key));
+  const hiddenLabels = new Set(["Attendance Hours", "Effective Hours Ratio", ...hiddenColumns.map((key) => columnLabel(key))]);
+  const keys = Object.keys(sorted[0]).filter((key) => !key.startsWith("_") && !hidden.has(key) && !hiddenLabels.has(columnLabel(key)));
   const onSort = (key) => {
     setSort((current) => {
       if (!current || current.key !== key) return { key, direction: "asc" };

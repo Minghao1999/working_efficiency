@@ -19,6 +19,20 @@ const TARGET_UPPH_BY_WAREHOUSE = {
   "5": 11.3
 };
 
+function dateKeysBetween(from, to) {
+  if (!from || !to) return [];
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
+  const dates = [];
+  const current = new Date(start);
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
 export function EfficiencyPage() {
   const [view, setView] = useState("dashboard");
   const [files, setFiles] = useState([]);
@@ -174,7 +188,12 @@ export function EfficiencyPage() {
   }
 
   function resetPickingFilters(nextData) {
-    const firstDate = [...new Set((nextData.personEfficiency || []).map((r) => r.日期).filter(Boolean))][0] || "";
+    const requestedDates = dateKeysBetween(pickRange.from, pickRange.to);
+    const requested = new Set(requestedDates);
+    const rows = requestedDates.length
+      ? (nextData.personEfficiency || []).filter((r) => requested.has(r.日期))
+      : (nextData.personEfficiency || []);
+    const firstDate = [...new Set(rows.map((r) => r.日期).filter(Boolean))][0] || "";
     setPersonDate(firstDate);
     setPersonName("All People");
     setDeleted(new Set());
@@ -198,8 +217,14 @@ export function EfficiencyPage() {
   const indirectCategories = useMemo(() => ["All Categories", ...new Set((day?.indirect || []).map((r) => r.操作分类).filter(Boolean))].sort(), [day]);
   const completeness = data?.completeness || {};
 
-  const activePersonEfficiency = (pickingData?.personEfficiency || []).filter((r) => !deleted.has(personDeleteKey(r)));
-  const activePickingGantt = (pickingData?.pickingGantt || []).filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
+  const requestedPickingDates = dateKeysBetween(pickRange.from, pickRange.to);
+  const requestedPickingDateSet = new Set(requestedPickingDates);
+  const activePersonEfficiency = (pickingData?.personEfficiency || [])
+    .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.日期))
+    .filter((r) => !deleted.has(personDeleteKey(r)));
+  const activePickingGantt = (pickingData?.pickingGantt || [])
+    .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.date))
+    .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
   const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
   const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
   const selectedPersonDate = personDate || personDates[0] || "";

@@ -18,6 +18,20 @@ const TARGET_UPPH_BY_WAREHOUSE = {
   "5": 11.3
 };
 
+function dateKeysBetween(from, to) {
+  if (!from || !to) return [];
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
+  const dates = [];
+  const current = new Date(start);
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
 export function WeeklyPage() {
   const [volume, setVolume] = useState(null);
   const [laborMode, setLaborMode] = useState("excel");
@@ -106,8 +120,13 @@ export function WeeklyPage() {
 
   const dailyRows = useMemo(() => {
     if (!data?.daily) return [];
-    if (laborMode !== "manual") return data.daily;
-    return data.daily.map((row) => {
+    const requestedDates = dateKeysBetween(unitRange.from, unitRange.to);
+    const requested = new Set(requestedDates);
+    const scopedDaily = requestedDates.length
+      ? data.daily.filter((row) => requested.has(row.业务日期))
+      : data.daily;
+    if (laborMode !== "manual") return scopedDaily;
+    return scopedDaily.map((row) => {
       const date = row.业务日期;
       const rawHours = manualHours[date] ?? "";
       const hours = Number(rawHours);
@@ -118,11 +137,10 @@ export function WeeklyPage() {
         UPPH: hasHours ? Number((Number(row.件量 || 0) / hours).toFixed(2)) : ""
       };
     });
-  }, [data, laborMode, manualHours]);
+  }, [data, laborMode, manualHours, unitRange.from, unitRange.to]);
 
-  const kpi = data?.kpi || {};
-  const totalOrders = data ? Math.round(kpi.totalOrders || 0).toLocaleString() : "";
-  const totalUnits = data ? Math.round(kpi.totalUnits || 0).toLocaleString() : "";
+  const totalOrders = data ? Math.round(dailyRows.reduce((sum, row) => sum + Number(row.单量 || 0), 0)).toLocaleString() : "";
+  const totalUnits = data ? Math.round(dailyRows.reduce((sum, row) => sum + Number(row.件量 || 0), 0)).toLocaleString() : "";
   const targetUpph = TARGET_UPPH_BY_WAREHOUSE[warehouse] || "";
 
   return (
