@@ -214,6 +214,16 @@ function dailyFromCachedDocs(dates, byDate) {
     .filter((row) => row.单量 || row.件量);
 }
 
+function filterDailyByRequestedDates(daily, requestedDates) {
+  const requested = new Set(requestedDates);
+  return (daily || []).filter((row) => requested.has(row.业务日期));
+}
+
+function filterPickingRowsByRequestedDates(rows, requestedDates) {
+  const requested = new Set(requestedDates);
+  return (rows || []).filter((row) => requested.has(dayKey(parseDate(row.拣货完成时间))));
+}
+
 async function readCachedPickingRows({ warehouseKey, dates }) {
   const collection = await pickingCacheCollection();
   const docs = await collection
@@ -437,7 +447,7 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
     if (pageRows.length < pageSize) break;
   }
 
-  const fetchedDaily = weeklyDailyFromUnitRows(rows);
+  const fetchedDaily = filterDailyByRequestedDates(weeklyDailyFromUnitRows(rows), requestedDates);
   let daily = fetchedDaily;
 
   if (cacheStatus.enabled) {
@@ -512,7 +522,7 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     if (pageRows.length < pageSize) break;
   }
 
-  const normalizedRows = normalizePickingRows(rows);
+  const normalizedRows = filterPickingRowsByRequestedDates(normalizePickingRows(rows), requestedDates);
 
   if (cacheStatus.enabled) {
     try {

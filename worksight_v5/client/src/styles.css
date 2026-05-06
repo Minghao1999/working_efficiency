@@ -99,7 +99,7 @@ main {
 
 .page-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 18px;
@@ -120,6 +120,17 @@ main {
   font-size: 15px;
 }
 
+.page-view-toggle {
+  min-width: min(100%, 360px);
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.page-view-toggle button {
+  min-width: 0;
+  padding-inline: 14px;
+}
+
 .landing-grid,
 .upload-grid,
 .kpi-grid {
@@ -129,6 +140,8 @@ main {
 
 .landing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .upload-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
+.weekly-upload-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.picking-upload-grid { grid-template-columns: minmax(0, 950px); }
 .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 16px 0; }
 .kpi-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
@@ -246,6 +259,29 @@ main {
 .date-query {
   display: grid;
   gap: 8px;
+}
+
+.picking-action-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.date-query-warehouse {
+  display: grid;
+  gap: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.date-query-warehouse .glass-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.warehouse-query-select .glass-select-trigger {
+  min-height: 36px;
 }
 
 .date-query-title {
@@ -2178,4 +2214,34 @@ body {
 
 .kpi-grid .warehouse-kpi-select .glass-select-menu {
   z-index: 120;
+}
+
+.transfer-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: clamp(22px, 3vw, 34px);
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.transfer-summary span {
+  color: #5f7fae;
+}
+
+.transfer-log-card {
+  align-content: start;
+}
+
+.transfer-log {
+  width: 100%;
+  min-height: 260px;
+  max-height: 360px;
 }

@@ -127,7 +127,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     })
     .filter((r) => r.拣货完成时间);
   const fallbackDate = fallbackDates[0] || "Unknown Date";
-  for (const r of pick) r.日期 = dayKey(r.拣货开始时间 || r.拣货完成时间) || fallbackDate;
+  for (const r of pick) r.日期 = dayKey(r.拣货完成时间) || fallbackDate;
   const rawMap = new Map();
   for (const [key, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) rawMap.set(key, sum(items, (r) => r.实际拣货量));
   const unique = [];
@@ -147,7 +147,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const ends = items.map((r) => parseDate(r.拣货完成时间)).filter(Boolean);
     const end = ends.sort((a, b) => b - a)[0];
     if (!end) continue;
-    const start = starts.sort((a, b) => a - b)[0] || end;
+    const start = clampPickingStartToCompletionDate(starts.sort((a, b) => a - b)[0] || end, end);
     taskEvents.push({ 日期, 工号, start, end });
   }
   for (const [key, items] of groupBy(taskEvents, (r) => `${r.日期}|${r.工号}`)) {
@@ -204,6 +204,13 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   return { personEfficiency, pickingGantt: buildPickingGantt(pick) };
 }
 
+function clampPickingStartToCompletionDate(start, end) {
+  if (!start || !end) return start;
+  const completionDayStart = new Date(end);
+  completionDayStart.setHours(0, 0, 0, 0);
+  return start < completionDayStart ? completionDayStart : start;
+}
+
 function buildPickingGantt(pick) {
   const rows = [];
   for (const [personKey, personRows] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) {
@@ -213,9 +220,9 @@ function buildPickingGantt(pick) {
 
     for (const [, group] of groupBy(personRows, (r) => r._task_no || r._row_idx)) {
       const sorted = [...group].sort((a, b) => (a.拣货完成时间 || 0) - (b.拣货完成时间 || 0));
-      const receive = sorted.map((r) => r._receive_time || r.拣货开始时间).filter(Boolean).sort((a, b) => a - b)[0];
+      const rawReceive = sorted.map((r) => r._receive_time || r.拣货开始时间).filter(Boolean).sort((a, b) => a - b)[0];
       const completions = sorted.map((r) => r.拣货完成时间).filter(Boolean);
-      if (!receive || !completions.length) continue;
+      if (!rawReceive || !completions.length) continue;
 
       let startPick;
       let endPick;
@@ -223,7 +230,7 @@ function buildPickingGantt(pick) {
 
       if (sorted.length === 1) {
         endPick = completions[0];
-        startPick = new Date(Math.max(receive.getTime(), endPick.getTime() - 2 * 60 * 1000));
+        startPick = new Date(Math.max(rawReceive.getTime(), endPick.getTime() - 2 * 60 * 1000));
       } else {
         const counts = new Map();
         for (const end of completions) {
@@ -242,6 +249,8 @@ function buildPickingGantt(pick) {
       }
 
       if (startPick && endPick && endPick > startPick) {
+        const receive = clampPickingStartToCompletionDate(rawReceive, endPick);
+        startPick = clampPickingStartToCompletionDate(startPick, endPick);
         taskGroups.push({ receive, startPick, endPick, isBurst });
       }
     }
