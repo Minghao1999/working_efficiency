@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Trash2, X } from "lucide-react";
+import { Search, Trash2, X } from "lucide-react";
 import { fileIdentity } from "../utils/files";
 
 export function UploadBox({ title, caption, disabled = false, onChange, actionSlot = null }) {
@@ -214,6 +214,38 @@ export function ChartPanel({ title, caption, children }) {
 
 export function SelectLine({ label, value, options, onChange, onRemoveOption }) {
   return <label className="select-line">{label}<GlassSelect value={value} options={options} onChange={onChange} onRemoveOption={onRemoveOption} /></label>;
+}
+
+export function DateRangeQuery({ value, onChange, onQuery, disabled = false }) {
+  const queryDisabled = disabled || !onQuery;
+  return (
+    <div className="date-query">
+      <span className="date-query-title">Date Range</span>
+      <div className="date-query-fields">
+        <label>
+          <span>From</span>
+          <input
+            type="date"
+            lang="en"
+            value={value.from}
+            onChange={(event) => onChange((current) => ({ ...current, from: event.target.value }))}
+          />
+        </label>
+        <label>
+          <span>To</span>
+          <input
+            type="date"
+            lang="en"
+            value={value.to}
+            onChange={(event) => onChange((current) => ({ ...current, to: event.target.value }))}
+          />
+        </label>
+      </div>
+      <button type="button" className="primary-btn date-query-btn" onClick={onQuery} disabled={queryDisabled}>
+        <Search size={16} /> Query
+      </button>
+    </div>
+  );
 }
 
 export function ConfirmDialog({ title, message, onCancel, onConfirm }) {

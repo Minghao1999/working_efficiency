@@ -63,12 +63,13 @@ export function DailyDetailTable({ rows, lowUpph, manual, manualHours, setManual
   );
 }
 
-export function EditablePersonTable({ rows, markedForDelete, setMarkedForDelete }) {
+export function EditablePersonTable({ rows, markedForDelete = new Set(), setMarkedForDelete = () => {}, hiddenColumns = [] }) {
   const [sort, setSort] = useState(null);
 
   if (!rows.length) return <div className="empty">No data</div>;
   const sorted = sortRows(rows, sort);
-  const keys = Object.keys(sorted[0]).filter((key) => !key.startsWith("_"));
+  const hidden = new Set(hiddenColumns);
+  const keys = Object.keys(sorted[0]).filter((key) => !key.startsWith("_") && !hidden.has(key));
   const onSort = (key) => {
     setSort((current) => {
       if (!current || current.key !== key) return { key, direction: "asc" };

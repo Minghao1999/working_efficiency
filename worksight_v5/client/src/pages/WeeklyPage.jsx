@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Download, RotateCcw, Search } from "lucide-react";
+import { Download } from "lucide-react";
 import { API } from "../constants";
-import { GlassSelect, LaborHoursInput, Metric, ProgressBar, SelectLine, UploadBox } from "../components/controls";
-import { DailyDetailTable, EditablePersonTable } from "../components/tables";
-import { PersonEfficiencyChart, PickingGanttChart } from "../components/charts";
+import { DateRangeQuery, GlassSelect, LaborHoursInput, Metric, ProgressBar, UploadBox } from "../components/controls";
+import { DailyDetailTable } from "../components/tables";
 import { exportRows } from "../utils/export";
-import { formatUploadError, personDeleteKey } from "../utils/formatters";
+import { formatUploadError } from "../utils/formatters";
 
 const WAREHOUSE_OPTIONS = [
   { value: "1", label: "Warehouse 1" },
@@ -23,16 +22,11 @@ export function WeeklyPage() {
   const [volume, setVolume] = useState(null);
   const [laborMode, setLaborMode] = useState("excel");
   const [isc, setIsc] = useState(null);
-  const [pick, setPick] = useState(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [personDate, setPersonDate] = useState("");
-  const [personName, setPersonName] = useState("All People");
-  const [deleted, setDeleted] = useState(new Set());
   const [manualHours, setManualHours] = useState({});
   const [unitRange, setUnitRange] = useState({ from: "", to: "" });
-  const [pickRange, setPickRange] = useState({ from: "", to: "" });
   const [warehouse, setWarehouse] = useState("5");
   const requestSeq = useRef(0);
   const latestDailyRef = useRef([]);
@@ -43,7 +37,7 @@ export function WeeklyPage() {
 
   useEffect(() => {
     const seq = ++requestSeq.current;
-    const hasAnyUpload = Boolean(volume || pick || (laborMode === "excel" && isc));
+    const hasAnyUpload = Boolean(volume || (laborMode === "excel" && isc));
     if (!hasAnyUpload) {
       setError("");
       setLoading(false);
@@ -57,7 +51,6 @@ export function WeeklyPage() {
       const form = new FormData();
       if (volume) form.append("volume", volume);
       if (laborMode === "excel" && isc) form.append("isc", isc);
-      if (pick) form.append("pick", pick);
       if (!volume && latestDailyRef.current.length) form.append("existingDaily", JSON.stringify(latestDailyRef.current));
 
       try {
@@ -70,10 +63,6 @@ export function WeeklyPage() {
         if (!res.ok) throw json;
         if (seq !== requestSeq.current) return;
         setData(json);
-        const firstDate = [...new Set((json.personEfficiency || []).map((r) => r.日期).filter(Boolean))][0] || "";
-        setPersonDate(firstDate);
-        setPersonName("All People");
-        setDeleted(new Set());
       } catch (e) {
         if (e.name !== "AbortError" && seq === requestSeq.current) setError(formatUploadError(e));
       } finally {
@@ -85,41 +74,13 @@ export function WeeklyPage() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [volume, isc, pick, laborMode]);
+  }, [volume, isc, laborMode]);
 
   useEffect(() => {
     if (laborMode === "manual") {
       setIsc(null);
     }
   }, [laborMode]);
-
-  const activePersonEfficiency = (data?.personEfficiency || []).filter((r) => !deleted.has(personDeleteKey(r)));
-  const activePickingGantt = (data?.pickingGantt || []).filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
-  const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
-  const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
-  const selectedPersonDate = personDate || personDates[0] || "";
-  const pickingGanttRows = activePickingGantt
-    .filter((r) => personName !== "All People" || !selectedPersonDate || r.date === selectedPersonDate)
-    .filter((r) => personName === "All People" || r.name === personName);
-  const personRows = activePersonEfficiency
-    .filter((r) => personName !== "All People" || !selectedPersonDate || r.日期 === selectedPersonDate)
-    .filter((r) => personName === "All People" || r.姓名 === personName)
-    .map((r) => {
-      const { 低于目标, ...row } = r;
-      return row;
-    });
-
-  function removePersonFromFilter(name) {
-    if (!name || name === "All People") return;
-    const nextDeleted = new Set(deleted);
-    nextDeleted.add(name);
-    setDeleted(nextDeleted);
-    if (personName === name) setPersonName("All People");
-  }
-
-  function restoreDeletedPeople() {
-    setDeleted(new Set());
-  }
 
   async function queryUnitData() {
     setError("");
@@ -134,39 +95,8 @@ export function WeeklyPage() {
       if (!res.ok) throw json;
       setData((current) => ({
         ...(current || {}),
-        ...json,
-        personEfficiency: current?.personEfficiency || [],
-        pickingGantt: current?.pickingGantt || []
+        ...json
       }));
-    } catch (e) {
-      setError(formatUploadError(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function queryPickingData() {
-    setError("");
-    setLoading(true);
-    try {
-      const res = await fetch(`${API}/api/weekly/query-picking`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: pickRange.from, to: pickRange.to, warehouse, targetUpph })
-      });
-      const json = await res.json();
-      if (!res.ok) throw json;
-      setData((current) => ({
-        ...(current || {}),
-        personEfficiency: json.personEfficiency || [],
-        pickingGantt: json.pickingGantt || [],
-        daily: current?.daily || [],
-        kpi: current?.kpi || { totalOrders: 0, totalUnits: 0, targetUpph }
-      }));
-      const firstDate = [...new Set((json.personEfficiency || []).map((r) => r.日期).filter(Boolean))][0] || "";
-      setPersonDate(firstDate);
-      setPersonName("All People");
-      setDeleted(new Set());
     } catch (e) {
       setError(formatUploadError(e));
     } finally {
@@ -190,7 +120,6 @@ export function WeeklyPage() {
     });
   }, [data, laborMode, manualHours]);
 
-  const hasAttendance = laborMode === "excel" && Boolean(isc);
   const kpi = data?.kpi || {};
   const totalOrders = data ? Math.round(kpi.totalOrders || 0).toLocaleString() : "";
   const totalUnits = data ? Math.round(kpi.totalUnits || 0).toLocaleString() : "";
@@ -200,23 +129,17 @@ export function WeeklyPage() {
     <section className="page">
       <header className="page-head">
         <h1>Weekly Order and Unit Analysis</h1>
-        <p>Summarize orders, units, labor hours, UPPH, and per-person picking efficiency by business date</p>
+        <p>Summarize orders, units, labor hours, and UPPH by business date</p>
       </header>
 
-      <div className="upload-grid">
+      <div className="upload-grid weekly-upload-grid">
         <UploadBox
           title="Upload Unit Data"
-          caption="iWMS 销售单综合查询"
+          caption="iWMS sales order query"
           onChange={setVolume}
           actionSlot={<DateRangeQuery value={unitRange} onChange={setUnitRange} onQuery={queryUnitData} disabled={loading || !unitRange.from || !unitRange.to} />}
         />
         <LaborHoursInput mode={laborMode} setMode={setLaborMode} onFileChange={setIsc} />
-        <UploadBox
-          title="Upload Picking Data"
-          caption="iWMS 拣货结果查询"
-          onChange={setPick}
-          actionSlot={<DateRangeQuery value={pickRange} onChange={setPickRange} onQuery={queryPickingData} disabled={loading || !pickRange.from || !pickRange.to} />}
-        />
       </div>
       {loading && <ProgressBar value={72} label="Analyzing uploaded files..." />}
       {error && <div className="error">{error}</div>}
@@ -229,46 +152,19 @@ export function WeeklyPage() {
       </div>
 
       {data && (
-        <>
-          <div className="panel">
-            <div className="table-head">
-              <h2>Daily Detail</h2>
-              <button className="ghost-btn" onClick={() => exportRows(dailyRows, "Daily Detail", "order-unit-upph.xlsx")}><Download size={16} /> Download Excel</button>
-            </div>
-            <DailyDetailTable
-              rows={dailyRows}
-              lowUpph={targetUpph || null}
-              manual={laborMode === "manual"}
-              manualHours={manualHours}
-              setManualHours={setManualHours}
-            />
+        <div className="panel">
+          <div className="table-head">
+            <h2>Daily Detail</h2>
+            <button className="ghost-btn" onClick={() => exportRows(dailyRows, "Daily Detail", "order-unit-upph.xlsx")}><Download size={16} /> Download Excel</button>
           </div>
-
-          {!!activePersonEfficiency.length && (
-            <div className="panel">
-              <div className="table-head">
-                <h2>Per-Person Daily Picking Efficiency</h2>
-                <div className="button-row">
-                  <button className="ghost-btn" disabled={!deleted.size} onClick={restoreDeletedPeople} title="Restore deleted people"><RotateCcw size={16} /> Refresh</button>
-                </div>
-              </div>
-              <div className="filter-row">
-                <SelectLine label="Select Date" value={selectedPersonDate} options={personDates} onChange={setPersonDate} />
-                <SelectLine label="Filter Person" value={personName} options={personNames} onChange={setPersonName} onRemoveOption={removePersonFromFilter} />
-              </div>
-              {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
-              <EditablePersonTable rows={personRows} />
-            </div>
-          )}
-          {!!activePickingGantt.length && (
-            <div className="panel">
-              <div className="table-head">
-                <h2>Per-Person Picking Gantt</h2>
-              </div>
-              <PickingGanttChart rows={pickingGanttRows} groupByDate={personName !== "All People"} />
-            </div>
-          )}
-        </>
+          <DailyDetailTable
+            rows={dailyRows}
+            lowUpph={targetUpph || null}
+            manual={laborMode === "manual"}
+            manualHours={manualHours}
+            setManualHours={setManualHours}
+          />
+        </div>
       )}
     </section>
   );
@@ -284,38 +180,6 @@ function WarehouseMetric({ value, onChange }) {
         onChange={onChange}
         className="warehouse-kpi-select"
       />
-    </div>
-  );
-}
-
-function DateRangeQuery({ value, onChange, onQuery, disabled = false }) {
-  const queryDisabled = disabled || !onQuery;
-  return (
-    <div className="date-query">
-      <span className="date-query-title">Date Range</span>
-      <div className="date-query-fields">
-        <label>
-          <span>From</span>
-          <input
-            type="date"
-            lang="en"
-            value={value.from}
-            onChange={(event) => onChange((current) => ({ ...current, from: event.target.value }))}
-          />
-        </label>
-        <label>
-          <span>To</span>
-          <input
-            type="date"
-            lang="en"
-            value={value.to}
-            onChange={(event) => onChange((current) => ({ ...current, to: event.target.value }))}
-          />
-        </label>
-      </div>
-      <button type="button" className="primary-btn date-query-btn" onClick={onQuery} disabled={queryDisabled}>
-        <Search size={16} /> Query
-      </button>
     </div>
   );
 }
