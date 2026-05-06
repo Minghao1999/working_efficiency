@@ -335,7 +335,7 @@ export function EfficiencyPage() {
           <div className="upload-grid picking-upload-grid">
             <UploadBox
               title="Upload Picking Data"
-              caption="iWMS picking result query"
+              caption="iWMS 拣货结果查询"
               onChange={setPick}
               actionSlot={(
                 <div className="picking-action-stack">
