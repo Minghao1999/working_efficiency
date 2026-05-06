@@ -153,7 +153,7 @@ export function WeeklyPage() {
       <div className="upload-grid weekly-upload-grid">
         <UploadBox
           title="Upload Unit Data"
-          caption="iWMS sales order query"
+          caption="iWMS 销售单综合查询"
           onChange={setVolume}
           actionSlot={<DateRangeQuery value={unitRange} onChange={setUnitRange} onQuery={queryUnitData} disabled={loading || !unitRange.from || !unitRange.to} />}
         />

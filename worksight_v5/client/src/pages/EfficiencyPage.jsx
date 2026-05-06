@@ -254,10 +254,11 @@ export function EfficiencyPage() {
               <span>Upload Data Files</span>
             </div>
             <div className="source-list">
-              <div>ISC Task Data: from ISC employee operation duration (Global Export required) · Required</div>
-              <div>iAMS Attendance: shift details and actual clock-in/out time · Optional</div>
-              <div>Volume Data: iWMS sales order query with pack completion time and units · Optional</div>
-              <div>Punch Data: iAMS punch log with warehouse entry/exit records · Optional</div>
+              <div>ISC Task Data: ISC 员工操作时长 (Global Export required) · Required</div>
+              <div>iAMS Attendance: iAMS班次明细 · Optional</div>
+              <div>Volume Data: iWMS 销售单综合查询 · Optional</div>
+              <div>Punch Data: iAMS 打卡流水 · Optional</div>
+              <div>算力不足，最好一个文件一个文件上传，谢谢！</div>
             </div>
             <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={addEfficiencyFiles} />
             <SelectedFileList files={files} onRemove={removeEfficiencyFile} />
@@ -335,7 +336,7 @@ export function EfficiencyPage() {
           <div className="upload-grid picking-upload-grid">
             <UploadBox
               title="Upload Picking Data"
-              caption="iWMS picking result query"
+              caption="iWMS 拣货结果查询"
               onChange={setPick}
               actionSlot={(
                 <div className="picking-action-stack">
