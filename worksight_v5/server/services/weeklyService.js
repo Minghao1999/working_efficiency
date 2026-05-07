@@ -257,9 +257,9 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
 
 function clampPickingStartToCompletionDate(start, end) {
   if (!start || !end) return start;
-  const completionDayStart = new Date(end);
-  completionDayStart.setHours(0, 0, 0, 0);
-  return start < completionDayStart ? completionDayStart : start;
+  const displayDayStart = new Date(end);
+  displayDayStart.setHours(6, 0, 0, 0);
+  return start < displayDayStart ? displayDayStart : start;
 }
 
 function lunchWindowFor(date) {
