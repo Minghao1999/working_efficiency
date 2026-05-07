@@ -1,6 +1,7 @@
 import {
   TARGET_MAP,
   dayKey,
+  dayKeyFromText,
   extractWarehouse,
   firstPresentColumn,
   groupBy,
@@ -14,7 +15,7 @@ import {
 } from "../utils/helpers.js";
 import { summarizeCompletedVolume } from "./volumeService.js";
 
-export function analyzeWeekly({ volumeFile, iscFile, pickFile, existingDaily = [] }) {
+export function analyzeWeekly({ volumeFile, iscFile, pickFile, pickFiles = [], existingDaily = [] }) {
   const daily = [];
   const volumeDates = [];
   if (volumeFile) {
@@ -75,8 +76,9 @@ export function analyzeWeekly({ volumeFile, iscFile, pickFile, existingDaily = [
   const targetUpph = iscFile ? (TARGET_MAP[warehouseName] || 11.3) : "";
   let personEfficiency = [];
   let pickingGantt = [];
-  if (pickFile) {
-    const pickAnalysis = analyzePickEfficiency(pickFile, iscFile, targetUpph, volumeDates);
+  const allPickFiles = pickFiles.length ? pickFiles : (pickFile ? [pickFile] : []);
+  if (allPickFiles.length) {
+    const pickAnalysis = analyzePickEfficiency(allPickFiles, iscFile, targetUpph, volumeDates);
     personEfficiency = pickAnalysis.personEfficiency;
     pickingGantt = pickAnalysis.pickingGantt;
   }
@@ -88,17 +90,20 @@ export function analyzeWeekly({ volumeFile, iscFile, pickFile, existingDaily = [
   };
 }
 
-function analyzePickEfficiency(pickFile, iscFile, targetUpph, fallbackDates = []) {
-  const pickWb = workbook(pickFile);
-  const pickRows = validateRows({
-    file: pickFile,
-    wb: pickWb,
-    label: "Upload Picking Data",
-    requiredColumns: ["拣货完成时间", "姓名"],
-    columnGroups: [
-      ["拣货开始时间", "任务领取时间"],
-      ["实际拣货量", "拣货数量", "拣货件数", "件数"]
-    ]
+function analyzePickEfficiency(pickFiles, iscFile, targetUpph, fallbackDates = []) {
+  const files = Array.isArray(pickFiles) ? pickFiles : [pickFiles];
+  const pickRows = files.flatMap((pickFile) => {
+    const pickWb = workbook(pickFile);
+    return validateRows({
+      file: pickFile,
+      wb: pickWb,
+      label: "Upload Picking Data",
+      requiredColumns: ["拣货完成时间", "姓名"],
+      columnGroups: [
+        ["拣货开始时间", "任务领取时间"],
+        ["实际拣货量", "拣货数量", "拣货件数", "件数"]
+      ]
+    });
   });
   return analyzePickRows(pickRows, iscFile, targetUpph, fallbackDates);
 }
@@ -113,9 +118,11 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     .map((r, idx) => {
       const name = String(val(r, "姓名") ?? "").trim();
       const employeeNo = String(pickEmployeeColumn ? val(r, pickEmployeeColumn) ?? "" : "").trim();
+      const rawCompletionTime = val(r, "拣货完成时间");
       return {
         ...r,
-        拣货完成时间: parseDate(val(r, "拣货完成时间")),
+        拣货完成时间: parseDate(rawCompletionTime),
+        _completion_day: dayKeyFromText(rawCompletionTime),
         拣货开始时间: parseDate(val(r, pickStartColumn)),
         _receive_time: parseDate(val(r, pickReceiveColumn)),
         实际拣货量: num(val(r, pickQtyColumn), 0),
@@ -127,7 +134,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     })
     .filter((r) => r.拣货完成时间);
   const fallbackDate = fallbackDates[0] || "Unknown Date";
-  for (const r of pick) r.日期 = dayKey(r.拣货完成时间) || fallbackDate;
+  for (const r of pick) r.日期 = r._completion_day || dayKey(r.拣货完成时间) || fallbackDate;
   const rawMap = new Map();
   for (const [key, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) rawMap.set(key, sum(items, (r) => r.实际拣货量));
   const unique = [];

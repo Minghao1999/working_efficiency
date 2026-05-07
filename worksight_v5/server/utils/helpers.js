@@ -130,6 +130,15 @@ export function dayKey(d) {
   return `${y}-${m}-${day}`;
 }
 
+export function dayKeyFromText(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" || v instanceof Date) return dayKey(v);
+  const s = String(v).trim();
+  const match = s.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (!match) return dayKey(s);
+  return `${match[1]}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`;
+}
+
 export function timeText(d) {
   d = parseDate(d);
   if (!d) return "缺失";

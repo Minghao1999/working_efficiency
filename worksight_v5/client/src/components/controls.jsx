@@ -2,25 +2,49 @@ import React, { useEffect, useState } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { fileIdentity } from "../utils/files";
 
-export function UploadBox({ title, caption, disabled = false, onChange, actionSlot = null }) {
-  const [fileName, setFileName] = useState("");
+export function UploadBox({ title, caption, disabled = false, multiple = false, maxFiles = Infinity, onChange, actionSlot = null, headerSlot = null }) {
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  useEffect(() => {
+    setSelectedFiles((current) => current.slice(0, multiple ? maxFiles : 1));
+  }, [multiple, maxFiles]);
   const clearFile = () => {
-    setFileName("");
-    onChange(null);
+    setSelectedFiles([]);
+    onChange(multiple ? [] : null);
   };
+  const fileName = selectedFiles.map((file) => file.name).join(", ");
   return (
     <div className={`${disabled ? "upload-box disabled" : "upload-box"} ${actionSlot ? "upload-box-with-tools" : ""}`}>
       <div className="upload-box-main">
-        <strong>{title}</strong>
+        <div className="upload-box-headline">
+          <strong>{title}</strong>
+          {headerSlot}
+        </div>
         <span>{caption}</span>
         <FilePicker
+          multiple={multiple}
           accept=".xlsx,.xls"
           disabled={disabled}
-          files={fileName ? [{ name: fileName }] : []}
+          files={selectedFiles}
           onChange={(files) => {
-            const file = files[0] || null;
-            setFileName(file?.name || "");
-            onChange(file);
+            if (!multiple) {
+              const nextFiles = files.slice(0, 1);
+              setSelectedFiles(nextFiles);
+              onChange(nextFiles[0] || null);
+              return;
+            }
+
+            setSelectedFiles((current) => {
+              const seen = new Set(current.map(fileIdentity));
+              const additions = files.filter((file) => {
+                const key = fileIdentity(file);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+              const nextFiles = [...current, ...additions].slice(0, maxFiles);
+              onChange(nextFiles);
+              return nextFiles;
+            });
           }}
         />
         {fileName && (

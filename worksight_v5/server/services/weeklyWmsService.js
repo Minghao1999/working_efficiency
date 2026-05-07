@@ -1,4 +1,4 @@
-import { dayKey, num, parseDate, sum } from "../utils/helpers.js";
+import { dayKey, dayKeyFromText, num, parseDate, sum } from "../utils/helpers.js";
 import { getDb } from "./mongo.js";
 import { analyzePickRows } from "./weeklyService.js";
 
@@ -221,7 +221,7 @@ function filterDailyByRequestedDates(daily, requestedDates) {
 
 function filterPickingRowsByRequestedDates(rows, requestedDates) {
   const requested = new Set(requestedDates);
-  return (rows || []).filter((row) => requested.has(dayKey(parseDate(row.拣货完成时间))));
+  return (rows || []).filter((row) => requested.has(dayKeyFromText(row.拣货完成时间)));
 }
 
 async function readCachedPickingRows({ warehouseKey, dates }) {
@@ -245,7 +245,7 @@ async function readCachedPickingRows({ warehouseKey, dates }) {
 function groupPickingRowsByDate(rows) {
   const byDate = new Map();
   for (const row of rows || []) {
-    const date = dayKey(parseDate(row.拣货完成时间));
+    const date = dayKeyFromText(row.拣货完成时间);
     if (!date) continue;
     if (!byDate.has(date)) byDate.set(date, []);
     byDate.get(date).push(row);
@@ -318,7 +318,7 @@ function buildUnitQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize =
   return buildSoapEnvelope(arg0, arg1);
 }
 
-function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize = 1000 }) {
+function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize = 1000, bigWave = false }) {
   const { startTime, endTime } = normalizeDateRange(from, to);
   const arg0 = {
     bizType: "queryReportByCondition",
@@ -326,8 +326,8 @@ function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSiz
     callCode: "360BUY.WMS3.WS.CALLCODE.10401"
   };
   const arg1 = {
-    Id: "wms_picking_data_v2",
-    Name: "pickingResultsOfQuery",
+    Id: bigWave ? "wms_bigWave_picking_result" : "wms_picking_data_v2",
+    Name: bigWave ? "bigWavePickingResultsQuery" : "pickingResultsOfQuery",
     WkNo: process.env.WMS_WK_NO || DEFAULT_WMS_WK_NO,
     UserName: process.env.WMS_USER_NAME || DEFAULT_WMS_USER,
     ReportModelId: "",
@@ -338,7 +338,7 @@ function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSiz
         FirstValue: startTime,
         SecondValue: endTime,
         Compare: 9,
-        FieldId: "UPDATE_TIME",
+        FieldId: bigWave ? "d.update_time" : "UPDATE_TIME",
         FieldName: "pickingDate",
         Location: ""
       }
@@ -474,34 +474,52 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
 
 function normalizePickingRows(rows) {
   return (rows || []).map((row) => ({
-    拣货完成时间: row.updateTime,
-    拣货开始时间: row.fetchTime,
-    任务领取时间: row.fetchTime,
-    实际拣货量: row.pickingQty ?? row.GOODS_SUM ?? row.locateQty ?? 0,
-    工号: row.employeeNo || row.email || row.workerName,
-    员工号: row.employeeNo || row.email || row.workerName,
-    姓名: row.workerName || row.updateUser || row.employeeNo || "",
-    集合单号: row.taskPageNo || row.outboundNo || row.waveNo || row.batchNo,
-    任务单号: row.taskPageNo || row.outboundNo || row.waveNo || row.batchNo,
-    储位: row.cellNo || row.containerNo || row.goodsNo || row.outboundNo
+    拣货完成时间: readAny(row, ["拣货完成时间", "updateTime", "update_time", "pickingDate", "pickingTime"]),
+    拣货开始时间: readAny(row, ["拣货开始时间", "fetchTime", "fetch_time", "startTime", "start_time", "createTime"]),
+    任务领取时间: readAny(row, ["任务领取时间", "fetchTime", "fetch_time", "receiveTime", "receive_time", "startTime", "createTime"]),
+    实际拣货量: readAny(row, ["实际拣货量", "拣货数量", "拣货件数", "pickingQty", "GOODS_SUM", "goodsSum", "locateQty", "qty", "quantity"]) || 0,
+    工号: readAny(row, ["工号", "员工号", "employeeNo", "employee_no", "email", "workerName", "updateUser"]),
+    员工号: readAny(row, ["员工号", "工号", "employeeNo", "employee_no", "email", "workerName", "updateUser"]),
+    姓名: readAny(row, ["姓名", "workerName", "worker_name", "updateUser", "update_user", "employeeName", "employeeNo"]) || "",
+    集合单号: readAny(row, ["集合单号", "任务单号", "taskPageNo", "task_page_no", "outboundNo", "waveNo", "wave_no", "batchNo", "bigWaveNo"]),
+    任务单号: readAny(row, ["任务单号", "集合单号", "taskPageNo", "task_page_no", "outboundNo", "waveNo", "wave_no", "batchNo", "bigWaveNo"]),
+    储位: readAny(row, ["储位", "库位", "cellNo", "cell_no", "containerNo", "goodsNo", "outboundNo"])
   }));
 }
 
-export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, targetUpph = "" } = {}) {
+async function fetchPickingRows({ from, to, warehouseNo, bigWave = false }) {
+  const pageSize = bigWave ? 100 : 1000;
+  const rows = [];
+  const maxPages = 50;
+
+  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
+    const result = await postWms(buildPickingQueryBody({ from, to, warehouseNo, currentPage, pageSize, bigWave }), warehouseNo);
+    const pageRows = getRows(result);
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+
+  return rows;
+}
+
+export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, targetUpph = "", includeBigWavePick = false } = {}) {
   const warehouseKey = String(warehouse || "5").trim();
   const cleanWarehouseNo = resolveWarehouseNo(warehouse, warehouseNo);
   const { startDate, endDate } = normalizeDateRange(from, to);
   const requestedDates = dateKeysBetween(startDate, endDate);
-  let cacheStatus = { enabled: true };
+  const useCache = !includeBigWavePick;
+  let cacheStatus = { enabled: useCache };
   let cached = { rows: [], byDate: new Map(), missingDates: requestedDates };
 
-  try {
-    cached = await readCachedPickingRows({ warehouseKey, dates: requestedDates });
-  } catch (error) {
-    cacheStatus = { enabled: false, error: error.message };
+  if (useCache) {
+    try {
+      cached = await readCachedPickingRows({ warehouseKey, dates: requestedDates });
+    } catch (error) {
+      cacheStatus = { enabled: false, error: error.message };
+    }
   }
 
-  if (cacheStatus.enabled && !cached.missingDates.length) {
+  if (useCache && cacheStatus.enabled && !cached.missingDates.length) {
     const analysis = analyzePickRows(cached.rows, null, Number(targetUpph) || "", []);
     return {
       ...analysis,
@@ -511,20 +529,15 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     };
   }
 
-  const pageSize = 1000;
-  const rows = [];
-  const maxPages = 50;
-
-  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
-    const result = await postWms(buildPickingQueryBody({ from, to, warehouseNo: cleanWarehouseNo, currentPage, pageSize }), cleanWarehouseNo);
-    const pageRows = getRows(result);
-    rows.push(...pageRows);
-    if (pageRows.length < pageSize) break;
-  }
+  const regularRows = await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo });
+  const bigWaveRows = includeBigWavePick
+    ? await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo, bigWave: true })
+    : [];
+  const rows = [...regularRows, ...bigWaveRows];
 
   const normalizedRows = filterPickingRowsByRequestedDates(normalizePickingRows(rows), requestedDates);
 
-  if (cacheStatus.enabled) {
+  if (useCache && cacheStatus.enabled) {
     try {
       await writeCachedPickingRows({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: requestedDates, rows: normalizedRows });
     } catch (error) {
@@ -536,7 +549,9 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
   return {
     ...analysis,
     rawCount: rows.length,
-    source: cacheStatus.enabled && cached.byDate.size ? "mixed" : "wms",
+    source: includeBigWavePick ? "wms+big-wave" : (cacheStatus.enabled && cached.byDate.size ? "mixed" : "wms"),
+    regularRawCount: regularRows.length,
+    bigWaveRawCount: bigWaveRows.length,
     cacheStatus
   };
 }

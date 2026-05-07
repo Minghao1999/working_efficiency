@@ -249,6 +249,30 @@ main {
   min-width: 0;
 }
 
+.upload-box-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: max-content;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.inline-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .upload-box-tools {
   min-width: 0;
   border-left: 1px solid rgba(120, 144, 180, 0.18);
@@ -538,6 +562,21 @@ main {
   flex-wrap: wrap;
   gap: 12px 24px;
   margin: 8px 0 14px;
+}
+
+.search-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #344054;
+  font-weight: 750;
+}
+
+.search-line input {
+  width: 220px;
+  min-height: 42px;
+  border-radius: 10px;
+  padding: 8px 12px;
 }
 
 .chart-strip {

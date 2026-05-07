@@ -22,4 +22,12 @@ app.use("/api/export", exportRouter);
 app.use("/api/picking-exception", pickingExceptionRouter);
 app.use("/api/feedback", feedbackRouter);
 
+app.use((error, _req, res, _next) => {
+  res.status(error.status || 400).json({
+    error: error.code === "LIMIT_UNEXPECTED_FILE"
+      ? "Too many files were uploaded for this field."
+      : error.message || "Request failed"
+  });
+});
+
 export default app;

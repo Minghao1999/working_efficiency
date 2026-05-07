@@ -53,6 +53,29 @@ function pickingDurationForRow(row, durationMap) {
   return durationMap.get(`${row.日期}|${row.工号}`) || durationMap.get(`${row.日期}|${row.姓名}`) || Number(row.总时长) || 0;
 }
 
+function matchesPersonSearch(row, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [row?.姓名, row?.工号, row?.name, row?.employeeNo]
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(q));
+}
+
+async function readApiJson(response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return response.json();
+
+  const text = await response.text();
+  const htmlTitle = text.match(/<title>(.*?)<\/title>/i)?.[1];
+  const error = new Error(
+    htmlTitle
+      ? `API returned an HTML error page: ${htmlTitle}`
+      : `API returned ${response.status || "non-JSON"} instead of JSON. Check that the backend is running and deployed with the latest code.`
+  );
+  error.status = response.status;
+  throw error;
+}
+
 export function EfficiencyPage() {
   const [view, setView] = useState("dashboard");
   const [files, setFiles] = useState([]);
@@ -68,12 +91,14 @@ export function EfficiencyPage() {
   const [progress, setProgress] = useState({ value: 0, label: "" });
   const [submittedFileKeys, setSubmittedFileKeys] = useState(new Set());
 
-  const [pick, setPick] = useState(null);
+  const [pickFiles, setPickFiles] = useState([]);
+  const [includeBigWavePick, setIncludeBigWavePick] = useState(false);
   const [pickingData, setPickingData] = useState(null);
   const [pickingLoading, setPickingLoading] = useState(false);
   const [pickingError, setPickingError] = useState("");
   const [personDate, setPersonDate] = useState("");
   const [personName, setPersonName] = useState("All People");
+  const [personSearch, setPersonSearch] = useState("");
   const [deleted, setDeleted] = useState(new Set());
   const [pickRange, setPickRange] = useState({ from: "", to: "" });
   const [warehouse, setWarehouse] = useState("5");
@@ -82,7 +107,7 @@ export function EfficiencyPage() {
 
   useEffect(() => {
     const seq = ++pickingRequestSeq.current;
-    if (!pick) {
+    if (!pickFiles.length) {
       setPickingError("");
       setPickingLoading(false);
       return;
@@ -93,7 +118,7 @@ export function EfficiencyPage() {
       setPickingError("");
       setPickingLoading(true);
       const form = new FormData();
-      form.append("pick", pick);
+      pickFiles.forEach((file) => form.append("pick", file));
 
       try {
         const res = await fetch(`${API}/api/weekly/analyze`, {
@@ -101,7 +126,7 @@ export function EfficiencyPage() {
           body: form,
           signal: controller.signal
         });
-        const json = await res.json();
+        const json = await readApiJson(res);
         if (!res.ok) throw json;
         if (seq !== pickingRequestSeq.current) return;
         setPickingData(json);
@@ -117,7 +142,7 @@ export function EfficiencyPage() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [pick]);
+  }, [pickFiles]);
 
   function addEfficiencyFiles(nextFiles) {
     setFiles((current) => mergeFiles(current, nextFiles));
@@ -164,7 +189,7 @@ export function EfficiencyPage() {
     filesToUpload.forEach((file) => form.append("files", file));
     try {
       const res = await fetch(`${API}/api/efficiency/analyze`, { method: "POST", body: form });
-      const json = await res.json();
+      const json = await readApiJson(res);
       if (!res.ok) throw new Error(json.error || "Dashboard generation failed");
       setProgress({ value: 100, label: "Dashboard ready." });
       if (json.partial === "volume") {
@@ -190,9 +215,9 @@ export function EfficiencyPage() {
       const res = await fetch(`${API}/api/weekly/query-picking`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: pickRange.from, to: pickRange.to, warehouse, targetUpph })
+        body: JSON.stringify({ from: pickRange.from, to: pickRange.to, warehouse, targetUpph, includeBigWavePick })
       });
-      const json = await res.json();
+      const json = await readApiJson(res);
       if (!res.ok) throw json;
       setPickingData((current) => ({
         ...(current || {}),
@@ -216,7 +241,18 @@ export function EfficiencyPage() {
     const firstDate = [...new Set(rows.map((r) => r.日期).filter(Boolean))][0] || "";
     setPersonDate(firstDate);
     setPersonName("All People");
+    setPersonSearch("");
     setDeleted(new Set());
+  }
+
+  function handlePickingFiles(files) {
+    setPickFiles((includeBigWavePick ? files : files.slice(0, 1)).filter(Boolean));
+  }
+
+  function toggleBigWavePick(event) {
+    const enabled = event.target.checked;
+    setIncludeBigWavePick(enabled);
+    if (!enabled) setPickFiles((current) => current.slice(0, 1));
   }
 
   function removePersonFromFilter(name) {
@@ -241,10 +277,12 @@ export function EfficiencyPage() {
   const requestedPickingDateSet = new Set(requestedPickingDates);
   const activePersonEfficiency = (pickingData?.personEfficiency || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.日期))
-    .filter((r) => !deleted.has(personDeleteKey(r)));
+    .filter((r) => !deleted.has(personDeleteKey(r)))
+    .filter((r) => matchesPersonSearch(r, personSearch));
   const activePickingGantt = (pickingData?.pickingGantt || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.date))
-    .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
+    .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo))
+    .filter((r) => matchesPersonSearch(r, personSearch));
   const pickingDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt), [activePickingGantt]);
   const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
   const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
@@ -372,7 +410,15 @@ export function EfficiencyPage() {
             <UploadBox
               title="Upload Picking Data"
               caption="iWMS 拣货结果查询"
-              onChange={setPick}
+              multiple={includeBigWavePick}
+              maxFiles={includeBigWavePick ? 2 : 1}
+              onChange={handlePickingFiles}
+              headerSlot={(
+                <label className="inline-toggle" title="Allow uploading a regular picking file plus a big-wave picking file">
+                  <input type="checkbox" checked={includeBigWavePick} onChange={toggleBigWavePick} />
+                  <span>Big-wave picking</span>
+                </label>
+              )}
               actionSlot={(
                 <div className="picking-action-stack">
                   <label className="date-query-warehouse">
@@ -403,6 +449,15 @@ export function EfficiencyPage() {
               <div className="filter-row">
                 <SelectLine label="Select Date" value={selectedPersonDate} options={personDates} onChange={setPersonDate} />
                 <SelectLine label="Filter Person" value={personName} options={personNames} onChange={setPersonName} onRemoveOption={removePersonFromFilter} />
+                <label className="search-line">
+                  Search Person
+                  <input
+                    type="search"
+                    value={personSearch}
+                    placeholder="Name or ID"
+                    onChange={(event) => setPersonSearch(event.target.value)}
+                  />
+                </label>
               </div>
               {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
               <EditablePersonTable rows={personRows} hiddenColumns={["è€ƒå‹¤æ—¶é•¿", "æœ‰æ•ˆå·¥æ—¶å æ¯”"]} />
