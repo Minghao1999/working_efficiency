@@ -2,10 +2,16 @@ import React, { useEffect, useState } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { fileIdentity } from "../utils/files";
 
+function normalizeSelectedFiles(files, maxFiles) {
+  return [...files]
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }))
+    .slice(0, maxFiles);
+}
+
 export function UploadBox({ title, caption, disabled = false, multiple = false, maxFiles = Infinity, onChange, actionSlot = null, headerSlot = null }) {
   const [selectedFiles, setSelectedFiles] = useState([]);
   useEffect(() => {
-    setSelectedFiles((current) => current.slice(0, multiple ? maxFiles : 1));
+    setSelectedFiles((current) => normalizeSelectedFiles(current, multiple ? maxFiles : 1));
   }, [multiple, maxFiles]);
   const clearFile = () => {
     setSelectedFiles([]);
@@ -27,7 +33,7 @@ export function UploadBox({ title, caption, disabled = false, multiple = false, 
           files={selectedFiles}
           onChange={(files) => {
             if (!multiple) {
-              const nextFiles = files.slice(0, 1);
+              const nextFiles = normalizeSelectedFiles(files, 1);
               setSelectedFiles(nextFiles);
               onChange(nextFiles[0] || null);
               return;
@@ -41,7 +47,7 @@ export function UploadBox({ title, caption, disabled = false, multiple = false, 
                 seen.add(key);
                 return true;
               });
-              const nextFiles = [...current, ...additions].slice(0, maxFiles);
+              const nextFiles = normalizeSelectedFiles([...current, ...additions], maxFiles);
               onChange(nextFiles);
               return nextFiles;
             });

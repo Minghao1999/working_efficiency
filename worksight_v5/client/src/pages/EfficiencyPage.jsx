@@ -61,6 +61,26 @@ function matchesPersonSearch(row, query) {
     .some((value) => String(value).toLowerCase().includes(q));
 }
 
+function normalizePickingFiles(files, includeBigWave) {
+  const selected = (Array.isArray(files) ? files : (files ? [files] : [])).filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  for (const file of selected) {
+    const key = `${file.name}|${file.size}|${file.lastModified}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(file);
+  }
+  const limit = includeBigWave ? 2 : 1;
+  return unique
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }))
+    .slice(0, limit);
+}
+
+function pickingFilesSignature(files) {
+  return files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join("|");
+}
+
 async function readApiJson(response) {
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return response.json();
@@ -117,6 +137,7 @@ export function EfficiencyPage() {
     const timer = setTimeout(async () => {
       setPickingError("");
       setPickingLoading(true);
+      const requestSignature = pickingFilesSignature(pickFiles);
       const form = new FormData();
       pickFiles.forEach((file) => form.append("pick", file));
 
@@ -128,6 +149,7 @@ export function EfficiencyPage() {
         });
         const json = await readApiJson(res);
         if (!res.ok) throw json;
+        if (requestSignature !== pickingFilesSignature(pickFiles)) return;
         if (seq !== pickingRequestSeq.current) return;
         setPickingData(json);
         resetPickingFilters(json);
@@ -246,13 +268,13 @@ export function EfficiencyPage() {
   }
 
   function handlePickingFiles(files) {
-    setPickFiles((includeBigWavePick ? files : files.slice(0, 1)).filter(Boolean));
+    setPickFiles(normalizePickingFiles(files, includeBigWavePick));
   }
 
   function toggleBigWavePick(event) {
     const enabled = event.target.checked;
     setIncludeBigWavePick(enabled);
-    if (!enabled) setPickFiles((current) => current.slice(0, 1));
+    setPickFiles((current) => normalizePickingFiles(current, enabled));
   }
 
   function removePersonFromFilter(name) {

@@ -474,6 +474,7 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
 
 function normalizePickingRows(rows) {
   return (rows || []).map((row) => ({
+    _source_key: row._source_key || "wms",
     拣货完成时间: readAny(row, ["拣货完成时间", "updateTime", "update_time", "pickingDate", "pickingTime"]),
     拣货开始时间: readAny(row, ["拣货开始时间", "fetchTime", "fetch_time", "startTime", "start_time", "createTime"]),
     任务领取时间: readAny(row, ["任务领取时间", "fetchTime", "fetch_time", "receiveTime", "receive_time", "startTime", "createTime"]),
@@ -529,9 +530,11 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     };
   }
 
-  const regularRows = await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo });
+  const regularRows = (await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo }))
+    .map((row) => ({ ...row, _source_key: "wms-regular" }));
   const bigWaveRows = includeBigWavePick
-    ? await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo, bigWave: true })
+    ? (await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo, bigWave: true }))
+      .map((row) => ({ ...row, _source_key: "wms-big-wave" }))
     : [];
   const rows = [...regularRows, ...bigWaveRows];
 

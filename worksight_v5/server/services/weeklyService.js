@@ -3,7 +3,6 @@ import {
   dayKey,
   dayKeyFromText,
   extractWarehouse,
-  firstPresentColumn,
   groupBy,
   num,
   parseDate,
@@ -14,6 +13,38 @@ import {
   workbook
 } from "../utils/helpers.js";
 import { summarizeCompletedVolume } from "./volumeService.js";
+
+function firstValue(row, candidates) {
+  for (const candidate of candidates) {
+    const value = val(row, candidate);
+    if (value != null && value !== "") return value;
+  }
+  return null;
+}
+
+function stableSourceKey(file, index) {
+  const name = String(file?.originalname || file?.name || `file-${index}`).toLowerCase();
+  const normalized = name
+    .replace(/\.[^.]+$/, "")
+    .replace(/\d{4}[-_ ]?\d{2}[-_ ]?\d{2}/g, "")
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `upload-${normalized || index}`;
+}
+
+function dateMs(value) {
+  return value instanceof Date ? value.getTime() : 0;
+}
+
+function comparePickRows(a, b) {
+  return String(a.日期).localeCompare(String(b.日期))
+    || String(a.工号).localeCompare(String(b.工号))
+    || String(a._task_group_key).localeCompare(String(b._task_group_key))
+    || dateMs(a.拣货开始时间) - dateMs(b.拣货开始时间)
+    || dateMs(a.拣货完成时间) - dateMs(b.拣货完成时间)
+    || String(a._source_key).localeCompare(String(b._source_key))
+    || String(a._row_idx).localeCompare(String(b._row_idx), undefined, { numeric: true });
+}
 
 export function analyzeWeekly({ volumeFile, iscFile, pickFile, pickFiles = [], existingDaily = [] }) {
   const daily = [];
@@ -86,14 +117,16 @@ export function analyzeWeekly({ volumeFile, iscFile, pickFile, pickFiles = [], e
     kpi: { totalOrders: sum(daily, (r) => r.单量), totalUnits: sum(daily, (r) => r.件量), warehouseName, targetUpph },
     daily,
     personEfficiency,
-    pickingGantt
+    pickingGantt,
+    sourceKeys: [...new Set((pickingGantt || []).map((row) => row.sourceKey).filter(Boolean))]
   };
 }
 
 function analyzePickEfficiency(pickFiles, iscFile, targetUpph, fallbackDates = []) {
   const files = Array.isArray(pickFiles) ? pickFiles : [pickFiles];
-  const pickRows = files.flatMap((pickFile) => {
+  const pickRows = files.flatMap((pickFile, sourceIndex) => {
     const pickWb = workbook(pickFile);
+    const sourceKey = stableSourceKey(pickFile, sourceIndex);
     return validateRows({
       file: pickFile,
       wb: pickWb,
@@ -103,45 +136,50 @@ function analyzePickEfficiency(pickFiles, iscFile, targetUpph, fallbackDates = [
         ["拣货开始时间", "任务领取时间"],
         ["实际拣货量", "拣货数量", "拣货件数", "件数"]
       ]
-    });
+    }).map((row, sourceRowIndex) => ({ ...row, _source_key: sourceKey, _source_row_idx: sourceRowIndex }));
   });
   return analyzePickRows(pickRows, iscFile, targetUpph, fallbackDates);
 }
 
 export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallbackDates = []) {
-  const pickStartColumn = firstPresentColumn(pickRows, ["拣货开始时间", "任务领取时间"]);
-  const pickReceiveColumn = firstPresentColumn(pickRows, ["任务领取时间", "拣货开始时间"]);
-  const pickQtyColumn = firstPresentColumn(pickRows, ["实际拣货量", "拣货数量", "拣货件数", "件数"]);
-  const pickEmployeeColumn = firstPresentColumn(pickRows, ["工号", "员工号"]);
-  const pickTaskColumn = firstPresentColumn(pickRows, ["集合单号", "任务单号"]);
   const pick = pickRows
     .map((r, idx) => {
       const name = String(val(r, "姓名") ?? "").trim();
-      const employeeNo = String(pickEmployeeColumn ? val(r, pickEmployeeColumn) ?? "" : "").trim();
-      const rawCompletionTime = val(r, "拣货完成时间");
+      const employeeNo = String(firstValue(r, ["工号", "员工号"]) ?? "").trim();
+      const rawCompletionTime = firstValue(r, ["拣货完成时间"]);
+      const sourceKey = r._source_key || "source-0";
+      const startTime = parseDate(firstValue(r, ["拣货开始时间", "任务领取时间"]));
+      const receiveTime = parseDate(firstValue(r, ["任务领取时间", "拣货开始时间"]));
+      const taskNo = firstValue(r, ["集合单号", "任务单号"]);
+      const taskStartKey = startTime ? String(startTime.getTime()) : "";
+      const sourceRowIdx = r._source_row_idx ?? idx;
+      const taskBase = taskNo ?? (taskStartKey || `row-${sourceRowIdx}`);
       return {
         ...r,
         拣货完成时间: parseDate(rawCompletionTime),
         _completion_day: dayKeyFromText(rawCompletionTime),
-        拣货开始时间: parseDate(val(r, pickStartColumn)),
-        _receive_time: parseDate(val(r, pickReceiveColumn)),
-        实际拣货量: num(val(r, pickQtyColumn), 0),
+        拣货开始时间: startTime,
+        _receive_time: receiveTime,
+        实际拣货量: num(firstValue(r, ["实际拣货量", "拣货数量", "拣货件数", "件数"]), 0),
         工号: employeeNo || name,
         姓名: name,
-        _task_no: pickTaskColumn ? val(r, pickTaskColumn) : `row-${idx}`,
-        _row_idx: idx
+        _source_key: sourceKey,
+        _task_no: taskBase,
+        _task_group_key: `${sourceKey}|${taskBase}|${taskStartKey}`,
+        _row_idx: sourceRowIdx
       };
     })
     .filter((r) => r.拣货完成时间);
   const fallbackDate = fallbackDates[0] || "Unknown Date";
   for (const r of pick) r.日期 = r._completion_day || dayKey(r.拣货完成时间) || fallbackDate;
+  pick.sort(comparePickRows);
   const rawMap = new Map();
   for (const [key, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) rawMap.set(key, sum(items, (r) => r.实际拣货量));
   const unique = [];
   const seen = new Set();
   for (const r of pick) {
     const location = val(r, "储位") ?? val(r, "库位") ?? r._row_idx;
-    const k = `${location}|${r.拣货完成时间?.toISOString()}|${r._task_no}|${r.工号}`;
+    const k = `${r._source_key}|${location}|${r.拣货完成时间?.toISOString()}|${r._task_no}|${r.工号}`;
     if (!seen.has(k)) { seen.add(k); unique.push(r); }
   }
   const qtyMap = new Map();
@@ -149,17 +187,17 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   const timeMap = new Map();
   const totalSpanMap = new Map();
   const taskEvents = [];
-  for (const [taskKey, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}|${r._task_no}`)) {
+  for (const [taskKey, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}|${r._task_group_key}`)) {
     const [日期, 工号] = taskKey.split("|");
     const starts = items.map((r) => parseDate(r.拣货开始时间)).filter(Boolean);
     const ends = items.map((r) => parseDate(r.拣货完成时间)).filter(Boolean);
     const end = ends.sort((a, b) => b - a)[0];
     if (!end) continue;
     const start = clampPickingStartToCompletionDate(starts.sort((a, b) => a - b)[0] || end, end);
-    taskEvents.push({ 日期, 工号, start, end });
+    taskEvents.push({ 日期, 工号, start, end, _taskKey: taskKey });
   }
   for (const [key, items] of groupBy(taskEvents, (r) => `${r.日期}|${r.工号}`)) {
-    const sorted = items.sort((a, b) => a.end - b.end);
+    const sorted = items.sort((a, b) => a.end - b.end || a.start - b.start || String(a._taskKey || "").localeCompare(String(b._taskKey || "")));
     let hours = 0;
     for (let i = 0; i < sorted.length; i++) {
       const task = sorted[i];
@@ -254,9 +292,10 @@ function buildPickingGantt(pick) {
     const name = personRows.find((r) => r.姓名)?.姓名 || employeeNo;
     const taskGroups = [];
 
-    for (const [, group] of groupBy(personRows, (r) => r._task_no || r._row_idx)) {
-      const sorted = [...group].sort((a, b) => (a.拣货完成时间 || 0) - (b.拣货完成时间 || 0));
+    for (const [taskGroupKey, group] of groupBy(personRows, (r) => r._task_group_key || `${r._source_key || "source-0"}|${r._task_no || r._row_idx}`)) {
+      const sorted = [...group].sort(comparePickRows);
       const rawReceive = sorted.map((r) => r._receive_time || r.拣货开始时间).filter(Boolean).sort((a, b) => a - b)[0];
+      const explicitStarts = sorted.map((r) => r.拣货开始时间 || r._receive_time).filter(Boolean);
       const completions = sorted.map((r) => r.拣货完成时间).filter(Boolean);
       if (!rawReceive || !completions.length) continue;
 
@@ -264,7 +303,10 @@ function buildPickingGantt(pick) {
       let endPick;
       let isBurst = false;
 
-      if (sorted.length === 1) {
+      if (explicitStarts.length) {
+        startPick = explicitStarts.sort((a, b) => a - b)[0];
+        endPick = completions.sort((a, b) => b - a)[0];
+      } else if (sorted.length === 1) {
         endPick = completions[0];
         startPick = new Date(Math.max(rawReceive.getTime(), endPick.getTime() - 2 * 60 * 1000));
       } else {
@@ -287,17 +329,17 @@ function buildPickingGantt(pick) {
       if (startPick && endPick && endPick > startPick) {
         const receive = clampPickingStartToCompletionDate(rawReceive, endPick);
         startPick = clampPickingStartToCompletionDate(startPick, endPick);
-        taskGroups.push({ receive, startPick, endPick, isBurst });
+        taskGroups.push({ receive, startPick, endPick, isBurst, taskGroupKey, sourceKey: sorted[0]?._source_key || "" });
       }
     }
 
-    const sortedTasks = taskGroups.sort((a, b) => a.startPick - b.startPick);
+    const sortedTasks = taskGroups.sort((a, b) => a.startPick - b.startPick || a.endPick - b.endPick || String(a.taskGroupKey).localeCompare(String(b.taskGroupKey)));
     let lunchUsed = false;
 
     for (let i = 0; i < sortedTasks.length; i++) {
       const task = sortedTasks[i];
       const start = i === 0 && task.receive < task.startPick ? task.receive : task.startPick;
-      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, start, end: task.endPick, type: task.isBurst ? "burst" : "work" }, lunchUsed)) {
+      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, sourceKey: task.sourceKey, start, end: task.endPick, type: task.isBurst ? "burst" : "work" }, lunchUsed)) {
         lunchUsed = true;
       }
 
@@ -333,12 +375,13 @@ function addPickingSegmentWithLunch(rows, segment, lunchUsed) {
   return true;
 }
 
-function addPickingGanttRow(rows, { date, employeeNo, name, start, end, type }) {
+function addPickingGanttRow(rows, { date, employeeNo, name, sourceKey = "", start, end, type }) {
   if (!start || !end || end <= start) return;
   rows.push({
     date,
     employeeNo,
     name,
+    sourceKey,
     start: start.toISOString(),
     end: end.toISOString(),
     type,
