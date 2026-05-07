@@ -33,6 +33,26 @@ function dateKeysBetween(from, to) {
   return dates;
 }
 
+function buildPickingDurationMap(rows) {
+  const totals = new Map();
+  for (const row of rows || []) {
+    if (!row?.date || row.type === "lunch") continue;
+    const duration = Number(row.duration) || 0;
+    const keys = [
+      `${row.date}|${row.employeeNo || ""}`,
+      `${row.date}|${row.name || ""}`
+    ];
+    for (const key of keys) {
+      if (!key.endsWith("|")) totals.set(key, (totals.get(key) || 0) + duration);
+    }
+  }
+  return totals;
+}
+
+function pickingDurationForRow(row, durationMap) {
+  return durationMap.get(`${row.日期}|${row.工号}`) || durationMap.get(`${row.日期}|${row.姓名}`) || Number(row.总时长) || 0;
+}
+
 export function EfficiencyPage() {
   const [view, setView] = useState("dashboard");
   const [files, setFiles] = useState([]);
@@ -225,6 +245,7 @@ export function EfficiencyPage() {
   const activePickingGantt = (pickingData?.pickingGantt || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.date))
     .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
+  const pickingDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt), [activePickingGantt]);
   const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
   const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
   const selectedPersonDate = personDate || personDates[0] || "";
@@ -236,7 +257,21 @@ export function EfficiencyPage() {
     .filter((r) => personName === "All People" || r.姓名 === personName)
     .map((r) => {
       const { 低于目标, ...row } = r;
-      return row;
+      const 总时长 = pickingDurationForRow(row, pickingDurationMap);
+      const 总效率 = 总时长 ? (Number(row.总件数) || 0) / 总时长 : row.总效率;
+      return {
+        日期: row.日期,
+        工号: row.工号,
+        姓名: row.姓名,
+        总件数: row.总件数,
+        件数: row.件数,
+        有效工时: row.有效工时,
+        总时长,
+        考勤时长: row.考勤时长,
+        有效工时占比: row.有效工时占比,
+        拣非爆品效率: row.拣非爆品效率,
+        总效率
+      };
     });
 
   return (

@@ -140,6 +140,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   const qtyMap = new Map();
   for (const [key, items] of groupBy(unique, (r) => `${r.日期}|${r.工号}`)) qtyMap.set(key, sum(items, (r) => r.实际拣货量));
   const timeMap = new Map();
+  const totalSpanMap = new Map();
   const taskEvents = [];
   for (const [taskKey, items] of groupBy(pick, (r) => `${r.日期}|${r.工号}|${r._task_no}`)) {
     const [日期, 工号] = taskKey.split("|");
@@ -161,6 +162,9 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
       hours += (taskSeconds + interval) / 3600;
     }
     timeMap.set(key, hours);
+    const firstStart = sorted.map((task) => task.start).filter(Boolean).sort((a, b) => a - b)[0];
+    const lastEnd = sorted.map((task) => task.end).filter(Boolean).sort((a, b) => b - a)[0];
+    totalSpanMap.set(key, totalDurationHours(firstStart, lastEnd));
   }
   const attMap = new Map();
   if (iscFile) {
@@ -186,7 +190,8 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const effectiveCap = hasAttendance && 考勤时长 ? Math.min(考勤时长, 8) : rawEffectiveHours;
     const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
-    const 总效率 = 有效工时 ? 总件数 / 有效工时 : 0;
+    const totalSpanHours = totalSpanMap.get(key) || 0;
+    const 总效率 = totalSpanHours ? 总件数 / totalSpanHours : 0;
     return {
       日期,
       工号,
@@ -194,6 +199,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
       总件数,
       件数,
       有效工时,
+      总时长: totalSpanHours,
       考勤时长,
       有效工时占比: hasAttendance && 考勤时长 ? 有效工时 / 考勤时长 : "",
       拣非爆品效率,
@@ -209,6 +215,29 @@ function clampPickingStartToCompletionDate(start, end) {
   const completionDayStart = new Date(end);
   completionDayStart.setHours(0, 0, 0, 0);
   return start < completionDayStart ? completionDayStart : start;
+}
+
+function lunchWindowFor(date) {
+  const start = new Date(date);
+  start.setHours(12, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(13, 30, 0, 0);
+  return { start, end };
+}
+
+function lunchBreakForRange(start, end) {
+  if (!start || !end || end <= start) return null;
+  const lunch = lunchWindowFor(start);
+  const validStart = new Date(Math.max(start.getTime(), lunch.start.getTime()));
+  const validEnd = new Date(Math.min(end.getTime(), lunch.end.getTime()));
+  if ((validEnd - validStart) / 1000 < 1800) return null;
+  return { start: validStart, end: new Date(validStart.getTime() + 30 * 60 * 1000) };
+}
+
+function totalDurationHours(start, end) {
+  if (!start || !end || end <= start) return 0;
+  const lunch = lunchBreakForRange(start, end);
+  return Math.max(0, (end - start) / 3600000 - (lunch ? 0.5 : 0));
 }
 
 function buildPickingGantt(pick) {
@@ -261,35 +290,40 @@ function buildPickingGantt(pick) {
     for (let i = 0; i < sortedTasks.length; i++) {
       const task = sortedTasks[i];
       const start = i === 0 && task.receive < task.startPick ? task.receive : task.startPick;
-      addPickingGanttRow(rows, { date, employeeNo, name, start, end: task.endPick, type: task.isBurst ? "burst" : "work" });
+      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, start, end: task.endPick, type: task.isBurst ? "burst" : "work" }, lunchUsed)) {
+        lunchUsed = true;
+      }
 
       const nextTask = sortedTasks[i + 1];
       if (!nextTask || nextTask.startPick <= task.endPick) continue;
 
       const idleStart = task.endPick;
       const idleEnd = nextTask.startPick;
-      const lunchStart = new Date(idleStart);
-      lunchStart.setHours(12, 0, 0, 0);
-      const lunchEnd = new Date(idleStart);
-      lunchEnd.setHours(13, 30, 0, 0);
-      const validStart = new Date(Math.max(idleStart.getTime(), lunchStart.getTime()));
-      const validEnd = new Date(Math.min(idleEnd.getTime(), lunchEnd.getTime()));
-      const validSeconds = (validEnd - validStart) / 1000;
-
-      if (validSeconds >= 1800 && !lunchUsed) {
-        const lunchRealStart = validStart;
-        const lunchRealEnd = new Date(lunchRealStart.getTime() + 30 * 60 * 1000);
-        if (lunchRealStart > idleStart) addPickingGanttRow(rows, { date, employeeNo, name, start: idleStart, end: lunchRealStart, type: "idle" });
-        addPickingGanttRow(rows, { date, employeeNo, name, start: lunchRealStart, end: lunchRealEnd, type: "lunch" });
+      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, start: idleStart, end: idleEnd, type: "idle" }, lunchUsed)) {
         lunchUsed = true;
-        if (idleEnd > lunchRealEnd) addPickingGanttRow(rows, { date, employeeNo, name, start: lunchRealEnd, end: idleEnd, type: "idle" });
-      } else {
-        addPickingGanttRow(rows, { date, employeeNo, name, start: idleStart, end: idleEnd, type: "idle" });
       }
     }
   }
 
   return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.name).localeCompare(String(b.name)) || new Date(a.start) - new Date(b.start));
+}
+
+function addPickingSegmentWithLunch(rows, segment, lunchUsed) {
+  if (lunchUsed || !["work", "idle"].includes(segment.type)) {
+    addPickingGanttRow(rows, segment);
+    return false;
+  }
+
+  const lunch = lunchBreakForRange(segment.start, segment.end);
+  if (!lunch) {
+    addPickingGanttRow(rows, segment);
+    return false;
+  }
+
+  if (lunch.start > segment.start) addPickingGanttRow(rows, { ...segment, end: lunch.start });
+  addPickingGanttRow(rows, { ...segment, start: lunch.start, end: lunch.end, type: "lunch" });
+  if (segment.end > lunch.end) addPickingGanttRow(rows, { ...segment, start: lunch.end });
+  return true;
 }
 
 function addPickingGanttRow(rows, { date, employeeNo, name, start, end, type }) {

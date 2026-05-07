@@ -21,6 +21,7 @@ export const COLUMN_LABELS = {
   总件数: "Total Units",
   件数: "Units",
   有效工时: "Effective Hours",
+  总时长: "Total Duration",
   考勤时长: "Attendance Hours",
   有效工时占比: "Effective Hours Ratio",
   拣非爆品效率: "Non-Burst Picking Efficiency",
