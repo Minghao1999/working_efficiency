@@ -117,24 +117,42 @@ class PDAWindow(QWidget):
         result = subprocess.run(
             [ADB, "devices"],
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="ignore",
             text=True
         )
 
         lines = result.stdout.splitlines()
 
         devices = []
+        unauthorized = []
+        offline = []
 
         for line in lines[1:]:
             if "\tdevice" in line:
                 serial = line.split("\t")[0]
                 devices.append(serial)
+            elif "\tunauthorized" in line:
+                serial = line.split("\t")[0]
+                unauthorized.append(serial)
+            elif "\toffline" in line:
+                serial = line.split("\t")[0]
+                offline.append(serial)
 
         self.device_combo.addItems(devices)
 
         if devices:
             self.write_log(f"✅ 找到设备: {devices}")
+        elif unauthorized:
+            self.write_log(f"⚠️ PDA 未授权: {unauthorized}，请在 PDA 上点允许 USB 调试")
+        elif offline:
+            self.write_log(f"⚠️ PDA 离线: {offline}，请重新插拔 USB 或重启 PDA")
         else:
             self.write_log("❌ 未找到 PDA")
+
+            if result.stderr.strip():
+                self.write_log(f"ADB 错误: {result.stderr.strip()}")
 
     def tap(self, x, y):
         self.adb(["shell", "input", "tap", str(x), str(y)])
@@ -240,7 +258,11 @@ class PDAWindow(QWidget):
         if self.has_any(joined, [
             "Scan the picking task order number",
             "Scan the task order number",
-            "task order number"
+            "Scan The Picking Task Order No",
+            "Scan the task order No",
+            "Picking Task Order No",
+            "task order number",
+            "task order No"
         ]):
             return "task_order"
 
@@ -252,13 +274,6 @@ class PDAWindow(QWidget):
             return "container"
 
         if self.has_any(joined, [
-            "Scan Location Code",
-            "Scan Location No",
-            "Location Code"
-        ]):
-            return "location"
-
-        if self.has_any(joined, [
             "Scan Barcode",
             "Scan Goods Barcode",
             "Scan Goods Code",
@@ -266,6 +281,12 @@ class PDAWindow(QWidget):
             "barcode"
         ]):
             return "barcode"
+
+        if self.has_any(joined, [
+            "Scan Location Code",
+            "Scan Location No"
+        ]):
+            return "location"
 
         if self.has_any(joined, [
             "Enter QTY",
@@ -277,7 +298,7 @@ class PDAWindow(QWidget):
         ]):
             return "qty"
 
-        preview = " | ".join(texts[:12])
+        preview = " | ".join(texts[:24])
 
         if preview:
             self.write_log(f"页面文字: {preview}")
