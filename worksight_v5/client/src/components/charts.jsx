@@ -251,7 +251,7 @@ export function PickingGanttChart({ rows, groupByDate = false }) {
   const typeMeta = {
     work: { label: "Work", color: "#86AEE8", border: "#7899C8" },
     idle: { label: "Idle", color: "#D9B56D", border: "#C8A15A" },
-    burst: { label: "Burst", color: "#5C667A", border: "#4B5567" },
+    burst: { label: "Burst", color: "#F26D5B", border: "#D75245" },
     lunch: { label: "Lunch", color: "#DDEAF7", border: "#8AA4C2" }
   };
 

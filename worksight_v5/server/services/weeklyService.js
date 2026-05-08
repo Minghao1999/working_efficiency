@@ -298,6 +298,12 @@ function buildPickingGantt(pick) {
       const explicitStarts = sorted.map((r) => r.拣货开始时间 || r._receive_time).filter(Boolean);
       const completions = sorted.map((r) => r.拣货完成时间).filter(Boolean);
       if (!rawReceive || !completions.length) continue;
+      const sortedCompletions = completions.sort((a, b) => a - b);
+      const firstCompletion = sortedCompletions[0];
+      const lastCompletion = sortedCompletions[sortedCompletions.length - 1];
+      const sameCompletionEnd = sorted.length > 1 && firstCompletion.getTime() === lastCompletion.getTime()
+        ? new Date(firstCompletion.getTime() + sorted.length * 60 * 1000)
+        : null;
 
       let startPick;
       let endPick;
@@ -305,10 +311,15 @@ function buildPickingGantt(pick) {
 
       if (explicitStarts.length) {
         startPick = explicitStarts.sort((a, b) => a - b)[0];
-        endPick = completions.sort((a, b) => b - a)[0];
+        endPick = sameCompletionEnd || lastCompletion;
+        isBurst = Boolean(sameCompletionEnd);
       } else if (sorted.length === 1) {
-        endPick = completions[0];
+        endPick = firstCompletion;
         startPick = new Date(Math.max(rawReceive.getTime(), endPick.getTime() - 2 * 60 * 1000));
+      } else if (sameCompletionEnd) {
+        startPick = firstCompletion;
+        endPick = sameCompletionEnd;
+        isBurst = true;
       } else {
         const counts = new Map();
         for (const end of completions) {
@@ -317,37 +328,41 @@ function buildPickingGantt(pick) {
         }
         const [mostCommonEndMs, maxCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
         if (maxCount / sorted.length >= 0.8) {
-          endPick = new Date(Number(mostCommonEndMs));
-          startPick = new Date(endPick.getTime() - sorted.length * 60 * 1000);
+          const commonEnd = new Date(Number(mostCommonEndMs));
+          startPick = commonEnd;
+          endPick = new Date(commonEnd.getTime() + maxCount * 60 * 1000);
           isBurst = true;
         } else {
-          startPick = completions.sort((a, b) => a - b)[0];
-          endPick = completions.sort((a, b) => b - a)[0];
+          startPick = firstCompletion;
+          endPick = lastCompletion;
         }
       }
 
       if (startPick && endPick && endPick > startPick) {
         const receive = clampPickingStartToCompletionDate(rawReceive, endPick);
         startPick = clampPickingStartToCompletionDate(startPick, endPick);
-        taskGroups.push({ receive, startPick, endPick, isBurst, taskGroupKey, sourceKey: sorted[0]?._source_key || "" });
+        taskGroups.push({ receive, startPick, firstCompletion, endPick, isBurst, taskGroupKey, sourceKey: sorted[0]?._source_key || "" });
       }
     }
 
+    const taskTimelineStart = (task, index) => index === 0 ? task.receive : (task.firstCompletion || task.startPick);
     const sortedTasks = taskGroups.sort((a, b) => a.startPick - b.startPick || a.endPick - b.endPick || String(a.taskGroupKey).localeCompare(String(b.taskGroupKey)));
     let lunchUsed = false;
 
     for (let i = 0; i < sortedTasks.length; i++) {
       const task = sortedTasks[i];
-      const start = i === 0 && task.receive < task.startPick ? task.receive : task.startPick;
-      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, sourceKey: task.sourceKey, start, end: task.endPick, type: task.isBurst ? "burst" : "work" }, lunchUsed)) {
+      const start = taskTimelineStart(task, i);
+      const end = task.endPick > start ? task.endPick : new Date(start.getTime() + 60 * 1000);
+      if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, sourceKey: task.sourceKey, start, end, type: task.isBurst ? "burst" : "work" }, lunchUsed)) {
         lunchUsed = true;
       }
 
       const nextTask = sortedTasks[i + 1];
-      if (!nextTask || nextTask.startPick <= task.endPick) continue;
+      const nextStart = nextTask ? taskTimelineStart(nextTask, i + 1) : null;
+      if (!nextTask || nextStart <= end) continue;
 
-      const idleStart = task.endPick;
-      const idleEnd = nextTask.startPick;
+      const idleStart = end;
+      const idleEnd = nextStart;
       if (addPickingSegmentWithLunch(rows, { date, employeeNo, name, start: idleStart, end: idleEnd, type: "idle" }, lunchUsed)) {
         lunchUsed = true;
       }
