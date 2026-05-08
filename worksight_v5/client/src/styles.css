@@ -547,6 +547,10 @@ main {
   gap: 10px;
 }
 
+.button-row .primary-btn {
+  margin-top: 0;
+}
+
 .select-line,
 .toolbar label {
   display: inline-flex;
@@ -794,10 +798,11 @@ table {
 th,
 td {
   border-bottom: 1px solid #eef2f6;
-  padding: 10px 12px;
+  padding: 6px 10px;
   text-align: left;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 th {
@@ -835,6 +840,26 @@ th {
   font-size: 11px;
 }
 
+.select-col {
+  width: 56px;
+  text-align: center;
+}
+
+.select-col input {
+  width: 14px;
+  height: 14px;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.compact-table .sort-header {
+  gap: 5px;
+}
+
 .table-number-input {
   width: 132px;
   min-height: 34px;
@@ -855,6 +880,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .low-row td { background: #fff1f2; }
 .deleted-row td { background: #f3f4f6; color: #667085; }
 .danger-text { color: #dc2626; font-weight: 800; }
+.warning-cell { background: #fff3bf; color: #7a4f00; font-weight: 800; }
 
 .error,
 .success,

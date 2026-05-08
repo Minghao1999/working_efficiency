@@ -84,6 +84,10 @@ function loadData(taskFile, attendanceFile) {
   return { df, df2, groupMap };
 }
 
+function isWorkType(type) {
+  return ["work", "overnight", "overtime"].includes(type);
+}
+
 function buildIscOnlyTimeline(df) {
   const records = [];
   for (const [key, items] of groupBy(df.filter((r) => r.start && r.end && r.work_date), (r) => `${r.display_name}|${r.work_date}`)) {
@@ -196,7 +200,7 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
     const clippedStart = start < workStart ? workStart : start;
     const clippedEnd = end > workEnd ? workEnd : end;
     if (clippedStart >= clippedEnd) return null;
-    return { ...item, start: clippedStart, end: clippedEnd };
+    return { ...item, start: clippedStart, end: clippedEnd, actualStart: start, actualEnd: end };
   }
 
   function getIscTime(empNo, day) {
@@ -232,7 +236,8 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
       const e = t.end < workEnd ? t.end : workEnd;
       if (s >= e) continue;
       if (s > cursor) records.push(makeTimelineRow(display, day, cursor, s, "idle", shift, false, groupName));
-      records.push(makeTimelineRow(display, day, s, e, t.type, shift, false, groupName));
+      const type = t.type === "work" && t.actualEnd && t.actualEnd > workEnd ? "overtime" : t.type;
+      records.push(makeTimelineRow(display, day, s, e, type, shift, false, groupName, { actualEnd: t.actualEnd }));
       if (e > cursor) cursor = e;
     }
     if (cursor < workEnd) records.push(makeTimelineRow(display, day, cursor, workEnd, "idle", shift, false, groupName));
@@ -263,7 +268,8 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
         const e = t.end < workEnd ? t.end : workEnd;
         if (s >= e) continue;
         if (s > cursor) records.push(makeTimelineRow(display, day, cursor, s, "idle", shift, true, groupName));
-        records.push(makeTimelineRow(display, day, s, e, t.end && dayKey(t.end) > dayKey(workEnd) ? "overnight" : t.type, shift, true, groupName));
+        const type = t.type === "work" && t.actualEnd && t.actualEnd > workEnd ? "overtime" : t.type;
+        records.push(makeTimelineRow(display, day, s, e, type, shift, true, groupName, { actualEnd: t.actualEnd }));
         if (e > cursor) cursor = e;
       }
       if (cursor < workEnd) records.push(makeTimelineRow(display, day, cursor, workEnd, "idle", shift, true, groupName));
@@ -272,8 +278,8 @@ function buildTimeline(df, df2, groupMap, breaks = []) {
   return removeBreakOverlap(records);
 }
 
-function makeTimelineRow(name, date, start, end, type, shift, is_absent, group) {
-  return { name, date, start, end, type, shift, is_absent, group, duration: hoursBetween(start, end) };
+function makeTimelineRow(name, date, start, end, type, shift, is_absent, group, extra = {}) {
+  return { name, date, start, end, type, shift, is_absent, group, ...extra, duration: hoursBetween(start, end) };
 }
 
 function removeBreakOverlap(timeline) {
@@ -308,11 +314,11 @@ function buildHistory(timeline) {
     ratios[date] = {};
     wait[date] = {};
     for (const [name, rows] of groupBy(dayRows, (r) => r.name)) {
-      const workDuration = sum(rows.filter((r) => ["work", "overnight"].includes(r.type)), (r) => r.duration);
+      const workDuration = sum(rows.filter((r) => isWorkType(r.type)), (r) => r.duration);
       const totalDuration = sum(rows, (r) => r.duration);
       ratios[date][name] = totalDuration > 0 ? (workDuration / totalDuration) * 100 : 0;
       if (rows.some((r) => r.is_absent)) continue;
-      const work = rows.filter((r) => ["work", "overnight"].includes(r.type)).sort((a, b) => a.start - b.start);
+      const work = rows.filter((r) => isWorkType(r.type)).sort((a, b) => a.start - b.start);
       if (work.length) wait[date][empFromName(name)] = (work[0].start - minDate(rows, (r) => r.start)) / 1000;
     }
   }
@@ -324,10 +330,20 @@ function empFromName(name) {
   return m ? m[1].trim() : String(name).trim();
 }
 
+function firstActionFromTaskEnd(df, emp, selectedDate) {
+  const rows = (df || []).filter((r) => String(r.employee_no) === String(emp));
+  const starts = rows.map((r) => parseDate(r.start)).filter((d) => d && dayKey(d) === selectedDate).sort((a, b) => a - b);
+  const ends = rows.map((r) => parseDate(r.end)).filter((d) => d && dayKey(d) === selectedDate).sort((a, b) => a - b);
+  const firstStart = starts[0];
+  const firstEnd = ends[0];
+  if (firstStart && firstEnd && firstEnd < firstStart) return firstEnd;
+  return null;
+}
+
 function buildSummary(dfDay, df, df2, currentDay) {
   const summary = {};
   for (const [name, rows] of groupBy(dfDay, (r) => r.name)) {
-    const work = sum(rows.filter((r) => ["work", "overnight"].includes(r.type)), (r) => r.duration);
+    const work = sum(rows.filter((r) => isWorkType(r.type)), (r) => r.duration);
     const breaks = sum(rows.filter((r) => r.type === "break"), (r) => r.duration);
     const total = sum(rows, (r) => r.duration);
     const ratio = total - breaks > 0 ? (work / (total - breaks)) * 100 : 0;
@@ -347,12 +363,13 @@ function buildFirstActionTable(dfDay, df, df2, selectedDate, historyWait) {
   const prevDay = dayKey(addDays(parseDate(selectedDate), -1));
   for (const [name, group] of groupBy(dfDay, (r) => r.name)) {
     const emp = empFromName(name);
-    const work = group.filter((r) => ["work", "overnight"].includes(r.type)).sort((a, b) => a.start - b.start);
+    const work = group.filter((r) => isWorkType(r.type)).sort((a, b) => a.start - b.start);
     if (!work.length) continue;
     const iams = df2.find((r) => String(r.employee_no) === emp && adjustWorkDate(r.上班时间) === selectedDate);
     const iscRows = df.filter((r) => String(r.employee_no) === emp && r.work_date === selectedDate);
     const punchIn = iams?.上班时间 || minDate(iscRows, (r) => r.上班时间) || minDate(group, (r) => r.start);
-    const firstTask = work[0].start;
+    const taskEndFirstAction = firstActionFromTaskEnd(df, emp, selectedDate);
+    const firstTask = taskEndFirstAction || work[0].start;
     const waitSeconds = (firstTask - punchIn) / 1000;
     const prev = historyWait?.[prevDay]?.[emp];
     let trend = "-";
@@ -362,7 +379,7 @@ function buildFirstActionTable(dfDay, df, df2, selectedDate, historyWait) {
       const s = Math.floor(Math.abs(diff) % 60);
       trend = diff > 0 ? `↑ ${m}m ${s}s` : diff < 0 ? `↓ ${m}m ${s}s` : "=";
     }
-    rows.push({ Name: name, Group: group[0].group, Shift: group[0].shift, "Punch-in": timeText(punchIn), "First Task": timeText(firstTask), Wait: `${Math.floor(waitSeconds / 60)}m ${Math.floor(waitSeconds % 60)}s`, Trend: trend, _wait_seconds: waitSeconds });
+    rows.push({ Name: name, Group: group[0].group, Shift: group[0].shift, "Punch-in": timeText(punchIn), "First Task": timeText(firstTask), Wait: `${Math.floor(waitSeconds / 60)}m ${Math.floor(waitSeconds % 60)}s`, Trend: trend, _first_task_from_end: Boolean(taskEndFirstAction), _wait_seconds: waitSeconds });
   }
   return rows.sort((a, b) => b._wait_seconds - a._wait_seconds).map(({ _wait_seconds, ...r }) => r);
 }
@@ -504,7 +521,7 @@ export function analyzeEfficiency(files, { sessionId = "default", activeFiles = 
     const taskDay = dfByDate.get(date) || [];
     const attendanceDay = attendanceByDate.get(date) || [];
     const summary = buildSummary(dfDay, df, df2, date);
-    const totalWork = sum(dfDay.filter((r) => ["work", "overnight"].includes(r.type)), (r) => r.duration);
+    const totalWork = sum(dfDay.filter((r) => isWorkType(r.type)), (r) => r.duration);
     const totalAttendance = sum(dfDay, (r) => r.duration);
     days[date] = {
       kpi: {

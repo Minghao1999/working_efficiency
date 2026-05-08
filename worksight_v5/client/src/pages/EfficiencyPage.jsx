@@ -75,6 +75,10 @@ function pickingDurationForRow(row, durationMap) {
   return durationMap.get(`${row.日期}|${row.工号}`) || durationMap.get(`${row.日期}|${row.姓名}`) || Number(row.总时长) || 0;
 }
 
+function comparePersonKey(row) {
+  return String(row?.工号 || row?.employeeNo || row?.姓名 || row?.name || "").trim();
+}
+
 function matchesPersonSearch(row, query) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -143,6 +147,8 @@ export function EfficiencyPage() {
   const [personDate, setPersonDate] = useState("");
   const [personName, setPersonName] = useState("All People");
   const [personSearch, setPersonSearch] = useState("");
+  const [compareDraft, setCompareDraft] = useState(new Set());
+  const [comparePeople, setComparePeople] = useState(new Set());
   const [deleted, setDeleted] = useState(new Set());
   const [pickRange, setPickRange] = useState({ from: "", to: "" });
   const [warehouse, setWarehouse] = useState("5");
@@ -311,6 +317,28 @@ export function EfficiencyPage() {
 
   function restoreDeletedPeople() {
     setDeleted(new Set());
+    setCompareDraft(new Set());
+    setComparePeople(new Set());
+  }
+
+  function toggleComparePerson(row, checked) {
+    const id = `${row.日期}|${row.工号}`;
+    setCompareDraft((current) => {
+      const next = new Set(current);
+      checked ? next.add(id) : next.delete(id);
+      return next;
+    });
+  }
+
+  function applyComparePeople() {
+    const selectedKeys = new Set(
+      personRows
+        .filter((row) => compareDraft.has(`${row.日期}|${row.工号}`))
+        .map(comparePersonKey)
+        .filter(Boolean)
+    );
+    setComparePeople(selectedKeys);
+    setPersonName("All People");
   }
 
   const day = data?.days?.[date];
@@ -324,13 +352,19 @@ export function EfficiencyPage() {
   const basePersonEfficiency = (pickingData?.personEfficiency || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.日期))
     .filter((r) => !deleted.has(personDeleteKey(r)));
-  const activePersonEfficiency = basePersonEfficiency
+  const searchedPersonEfficiency = basePersonEfficiency
     .filter((r) => matchesPersonSearch(r, personSearch));
+  const activePersonEfficiency = comparePeople.size
+    ? searchedPersonEfficiency.filter((r) => comparePeople.has(comparePersonKey(r)))
+    : searchedPersonEfficiency;
   const basePickingGantt = (pickingData?.pickingGantt || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.date))
     .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
-  const activePickingGantt = basePickingGantt
+  const searchedPickingGantt = basePickingGantt
     .filter((r) => matchesPersonSearch(r, personSearch));
+  const activePickingGantt = comparePeople.size
+    ? searchedPickingGantt.filter((r) => comparePeople.has(comparePersonKey(r)))
+    : searchedPickingGantt;
   const pickingDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt), [activePickingGantt]);
   const pickingWorkDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt, true), [activePickingGantt]);
   const personDates = [...new Set(basePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
@@ -494,7 +528,8 @@ export function EfficiencyPage() {
               <div className="table-head">
                 <h2>Per-Person Daily Picking Efficiency</h2>
                 <div className="button-row">
-                  <button className="ghost-btn" disabled={!deleted.size} onClick={restoreDeletedPeople} title="Restore deleted people"><RotateCcw size={16} /> Refresh</button>
+                  <button className="primary-btn" disabled={!compareDraft.size} onClick={applyComparePeople}>Confirm Compare</button>
+                  <button className="ghost-btn" disabled={!deleted.size && !comparePeople.size && !compareDraft.size} onClick={restoreDeletedPeople} title="Refresh comparison and restore deleted people"><RotateCcw size={16} /> Refresh</button>
                 </div>
               </div>
               <div className="filter-row">
@@ -510,10 +545,18 @@ export function EfficiencyPage() {
                   />
                 </label>
               </div>
+              {!!comparePeople.size && <div className="hint-line">Comparing {comparePeople.size} selected people.</div>}
               {activePersonEfficiency.length ? (
                 <>
                   {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
-                  <EditablePersonTable rows={personRows} hiddenColumns={["è€ƒå‹¤æ—¶é•¿", "æœ‰æ•ˆå·¥æ—¶å æ¯”"]} />
+                  <EditablePersonTable
+                    rows={personRows}
+                    hiddenColumns={["è€ƒå‹¤æ—¶é•¿", "æœ‰æ•ˆå·¥æ—¶å æ¯”"]}
+                    selectable
+                    selectedRows={compareDraft}
+                    onToggleRow={toggleComparePerson}
+                    compact
+                  />
                 </>
               ) : (
                 <div className="empty">No people match the current search.</div>

@@ -2,6 +2,7 @@ export const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:3001";
 
 export const TYPE_COLORS = {
   work: "#86AEE8",
+  overtime: "#F97316",
   overnight: "#111827",
   idle: "#D8E3F0",
   break: "#F3E6B8"

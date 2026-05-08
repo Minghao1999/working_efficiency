@@ -12,7 +12,13 @@ export function DataTable({ rows, lowUpph, highlightWait }) {
           {rows.map((row, idx) => {
             const upph = Number(row.UPPH);
             const low = lowUpph && Number.isFinite(upph) && upph < lowUpph;
-            return <tr key={idx} className={low ? "low-row" : ""}>{keys.map((k) => <td key={k} className={highlightWait && k === "Wait" && parseInt(row[k]) > 5 ? "danger-text" : ""}>{formatCell(row[k])}</td>)}</tr>;
+            return <tr key={idx} className={low ? "low-row" : ""}>{keys.map((k) => {
+              const className = [
+                highlightWait && k === "Wait" && parseInt(row[k]) > 5 ? "danger-text" : "",
+                highlightWait && k === "First Task" && row._first_task_from_end ? "warning-cell" : ""
+              ].filter(Boolean).join(" ");
+              return <td key={k} className={className}>{formatCell(row[k])}</td>;
+            })}</tr>;
           })}
         </tbody>
       </table>
@@ -63,7 +69,16 @@ export function DailyDetailTable({ rows, lowUpph, manual, manualHours, setManual
   );
 }
 
-export function EditablePersonTable({ rows, markedForDelete = new Set(), setMarkedForDelete = () => {}, hiddenColumns = [] }) {
+export function EditablePersonTable({
+  rows,
+  markedForDelete = new Set(),
+  setMarkedForDelete = () => {},
+  hiddenColumns = [],
+  selectable = false,
+  selectedRows = new Set(),
+  onToggleRow = () => {},
+  compact = false
+}) {
   const [sort, setSort] = useState(null);
 
   if (!rows.length) return <div className="empty">No data</div>;
@@ -80,10 +95,11 @@ export function EditablePersonTable({ rows, markedForDelete = new Set(), setMark
   };
 
   return (
-    <div className="table-wrap">
+    <div className={compact ? "table-wrap compact-table" : "table-wrap"}>
       <table>
         <thead>
           <tr>
+            {selectable && <th className="select-col">Select</th>}
             {keys.map((k) => (
               <th key={k}>
                 <button className="sort-header" onClick={() => onSort(k)}>
@@ -97,11 +113,20 @@ export function EditablePersonTable({ rows, markedForDelete = new Set(), setMark
         <tbody>
           {sorted.map((row) => {
             const id = `${row.日期}|${row.工号}`;
-            return <tr key={id} className={row._deleted ? "deleted-row" : ""}>{keys.map((k) => <td key={k}>{k === "删除" ? <input type="checkbox" checked={markedForDelete.has(id)} onChange={(e) => {
-              const next = new Set(markedForDelete);
-              e.target.checked ? next.add(id) : next.delete(id);
-              setMarkedForDelete(next);
-            }} /> : formatCell(row[k])}</td>)}</tr>;
+            return (
+              <tr key={id} className={row._deleted ? "deleted-row" : ""}>
+                {selectable && (
+                  <td className="select-col">
+                    <input type="checkbox" checked={selectedRows.has(id)} onChange={(e) => onToggleRow(row, e.target.checked)} />
+                  </td>
+                )}
+                {keys.map((k) => <td key={k}>{k === "删除" ? <input type="checkbox" checked={markedForDelete.has(id)} onChange={(e) => {
+                  const next = new Set(markedForDelete);
+                  e.target.checked ? next.add(id) : next.delete(id);
+                  setMarkedForDelete(next);
+                }} /> : formatCell(row[k])}</td>)}
+              </tr>
+            );
           })}
         </tbody>
       </table>

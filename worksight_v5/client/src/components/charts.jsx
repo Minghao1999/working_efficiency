@@ -11,6 +11,7 @@ const HOVER_LABEL = {
 
 const HOVER_BORDER_COLORS = {
   work: "rgba(116, 159, 222, 0.72)",
+  overtime: "rgba(249, 115, 22, 0.7)",
   idle: "rgba(166, 151, 211, 0.62)",
   break: "rgba(218, 186, 94, 0.58)",
   overnight: "rgba(17, 24, 39, 0.5)"
@@ -18,9 +19,18 @@ const HOVER_BORDER_COLORS = {
 
 const HOVER_BG_COLORS = {
   work: "rgba(232, 242, 255, 0.96)",
+  overtime: "rgba(255, 247, 237, 0.96)",
   idle: "rgba(245, 240, 255, 0.96)",
   break: "rgba(255, 249, 226, 0.96)",
   overnight: "rgba(242, 243, 245, 0.96)"
+};
+
+const TYPE_LABELS = {
+  work: "Work",
+  overtime: "Overtime clipped",
+  overnight: "Overnight",
+  idle: "Idle",
+  break: "Break"
 };
 
 export function Donut({ ratio, work, attendance, note = "" }) {
@@ -53,7 +63,7 @@ export function Gantt({ rows, allRows, date, shift, summary, history }) {
     return {
       type: "bar",
       orientation: "h",
-      name: type,
+      name: TYPE_LABELS[type] || type,
       y: items.map((r) => r.name),
       x: items.map((r) => new Date(r.end) - new Date(r.start)),
       base: items.map((r) => new Date(r.start)),
@@ -66,10 +76,10 @@ export function Gantt({ rows, allRows, date, shift, summary, history }) {
       customdata: items.map((r) => {
         const person = stats[r.name] || {};
         return [
-          r.type,
+          TYPE_LABELS[r.type] || r.type,
           r.name,
           timeOf(r.start),
-          timeOf(r.end),
+          timeOf(r.actualEnd || r.end),
           r.duration,
           summary[r.name]?.ratio || 0,
           summary[r.name]?.in || "-",
@@ -153,7 +163,7 @@ function buildPersonStats(rows) {
     const current = acc[row.name] || { idleHours: 0, workHours: 0, attendanceHours: 0 };
     current.attendanceHours += Number(row.duration) || 0;
     if (row.type === "idle") current.idleHours += Number(row.duration) || 0;
-    if (row.type === "work" || row.type === "overnight") current.workHours += Number(row.duration) || 0;
+    if (row.type === "work" || row.type === "overnight" || row.type === "overtime") current.workHours += Number(row.duration) || 0;
     acc[row.name] = current;
     return acc;
   }, {});
