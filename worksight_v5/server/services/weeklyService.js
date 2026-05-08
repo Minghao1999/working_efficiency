@@ -187,7 +187,11 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   const pickingGantt = buildPickingGantt(pick);
   const ganttWorkMap = new Map();
   for (const [key, rows] of groupBy(pickingGantt.filter((r) => ["work", "burst"].includes(r.type)), (r) => `${r.date}|${r.employeeNo}`)) {
-    ganttWorkMap.set(key, sum(rows, (r) => r.duration));
+    ganttWorkMap.set(key, mergedDurationHours(rows));
+  }
+  const ganttDurationMap = new Map();
+  for (const [key, rows] of groupBy(pickingGantt.filter((r) => r.type !== "lunch"), (r) => `${r.date}|${r.employeeNo}`)) {
+    ganttDurationMap.set(key, mergedDurationHours(rows));
   }
   const timeMap = new Map();
   const totalSpanMap = new Map();
@@ -249,7 +253,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const effectiveCap = hasAttendance && 考勤时长 ? Math.min(考勤时长, 8) : rawEffectiveHours;
     const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
-    const totalSpanHours = totalSpanMap.get(key) || 0;
+    const totalSpanHours = ganttDurationMap.get(key) || 0;
     const 总效率 = totalSpanHours ? 总件数 / totalSpanHours : 0;
     return {
       日期,
@@ -302,6 +306,25 @@ function totalDurationHours(start, end) {
 function pickingMinutesForRows(rows) {
   const qty = sum(rows, (r) => r.实际拣货量);
   return Math.max(1, qty || rows.length);
+}
+
+function mergedDurationHours(rows) {
+  const intervals = rows
+    .map((row) => ({ start: new Date(row.start), end: new Date(row.end) }))
+    .filter((row) => !Number.isNaN(row.start.getTime()) && !Number.isNaN(row.end.getTime()) && row.end > row.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  let totalMs = 0;
+  let current = null;
+  for (const interval of intervals) {
+    if (!current || interval.start > current.end) {
+      if (current) totalMs += current.end - current.start;
+      current = { ...interval };
+    } else if (interval.end > current.end) {
+      current.end = interval.end;
+    }
+  }
+  if (current) totalMs += current.end - current.start;
+  return totalMs / 3600000;
 }
 
 function buildPickingGantt(pick) {

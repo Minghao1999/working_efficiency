@@ -33,18 +33,40 @@ function dateKeysBetween(from, to) {
   return dates;
 }
 
-function buildPickingDurationMap(rows) {
-  const totals = new Map();
+function buildPickingDurationMap(rows, productiveOnly = false) {
+  const intervals = new Map();
   for (const row of rows || []) {
     if (!row?.date || row.type === "lunch") continue;
-    const duration = Number(row.duration) || 0;
+    if (productiveOnly && !["work", "burst"].includes(row.type)) continue;
+    const start = new Date(row.start);
+    const end = new Date(row.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) continue;
     const keys = [
       `${row.date}|${row.employeeNo || ""}`,
       `${row.date}|${row.name || ""}`
     ];
     for (const key of keys) {
-      if (!key.endsWith("|")) totals.set(key, (totals.get(key) || 0) + duration);
+      if (key.endsWith("|")) continue;
+      const items = intervals.get(key) || [];
+      items.push({ start, end });
+      intervals.set(key, items);
     }
+  }
+  const totals = new Map();
+  for (const [key, items] of intervals.entries()) {
+    const sorted = items.sort((a, b) => a.start - b.start || a.end - b.end);
+    let current = null;
+    let totalMs = 0;
+    for (const item of sorted) {
+      if (!current || item.start > current.end) {
+        if (current) totalMs += current.end - current.start;
+        current = { ...item };
+      } else if (item.end > current.end) {
+        current.end = item.end;
+      }
+    }
+    if (current) totalMs += current.end - current.start;
+    totals.set(key, totalMs / 3600000);
   }
   return totals;
 }
@@ -56,9 +78,11 @@ function pickingDurationForRow(row, durationMap) {
 function matchesPersonSearch(row, query) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [row?.姓名, row?.工号, row?.name, row?.employeeNo]
+  const haystack = [row?.姓名, row?.工号, row?.name, row?.employeeNo]
     .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(q));
+    .map((value) => String(value).toLowerCase())
+    .join(" ");
+  return q.split(/\s+/).every((token) => haystack.includes(token));
 }
 
 function normalizePickingFiles(files, includeBigWave) {
@@ -297,17 +321,20 @@ export function EfficiencyPage() {
 
   const requestedPickingDates = dateKeysBetween(pickRange.from, pickRange.to);
   const requestedPickingDateSet = new Set(requestedPickingDates);
-  const activePersonEfficiency = (pickingData?.personEfficiency || [])
+  const basePersonEfficiency = (pickingData?.personEfficiency || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.日期))
-    .filter((r) => !deleted.has(personDeleteKey(r)))
+    .filter((r) => !deleted.has(personDeleteKey(r)));
+  const activePersonEfficiency = basePersonEfficiency
     .filter((r) => matchesPersonSearch(r, personSearch));
-  const activePickingGantt = (pickingData?.pickingGantt || [])
+  const basePickingGantt = (pickingData?.pickingGantt || [])
     .filter((r) => !requestedPickingDates.length || requestedPickingDateSet.has(r.date))
-    .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo))
+    .filter((r) => !deleted.has(r.name) && !deleted.has(r.employeeNo));
+  const activePickingGantt = basePickingGantt
     .filter((r) => matchesPersonSearch(r, personSearch));
   const pickingDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt), [activePickingGantt]);
-  const personDates = [...new Set(activePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
-  const personNames = ["All People", ...new Set(activePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
+  const pickingWorkDurationMap = useMemo(() => buildPickingDurationMap(activePickingGantt, true), [activePickingGantt]);
+  const personDates = [...new Set(basePersonEfficiency.map((r) => r.日期).filter(Boolean))].sort();
+  const personNames = ["All People", ...new Set(basePersonEfficiency.map((r) => r.姓名).filter(Boolean))].sort();
   const selectedPersonDate = personDate || personDates[0] || "";
   const pickingGanttRows = activePickingGantt
     .filter((r) => personName !== "All People" || !selectedPersonDate || r.date === selectedPersonDate)
@@ -318,18 +345,20 @@ export function EfficiencyPage() {
     .map((r) => {
       const { 低于目标, ...row } = r;
       const 总时长 = pickingDurationForRow(row, pickingDurationMap);
+      const 有效工时 = pickingDurationForRow(row, pickingWorkDurationMap);
       const 总效率 = 总时长 ? (Number(row.总件数) || 0) / 总时长 : row.总效率;
+      const 拣非爆品效率 = 有效工时 ? (Number(row.件数) || 0) / 有效工时 : row.拣非爆品效率;
       return {
         日期: row.日期,
         工号: row.工号,
         姓名: row.姓名,
         总件数: row.总件数,
         件数: row.件数,
-        有效工时: row.有效工时,
+        有效工时,
         总时长,
         考勤时长: row.考勤时长,
         有效工时占比: row.有效工时占比,
-        拣非爆品效率: row.拣非爆品效率,
+        拣非爆品效率,
         总效率
       };
     });
@@ -460,7 +489,7 @@ export function EfficiencyPage() {
           {pickingLoading && <ProgressBar value={72} label="Analyzing picking data..." />}
           {pickingError && <div className="error">{pickingError}</div>}
 
-          {!!activePersonEfficiency.length && (
+          {!!basePersonEfficiency.length && (
             <div className="panel">
               <div className="table-head">
                 <h2>Per-Person Daily Picking Efficiency</h2>
@@ -481,21 +510,31 @@ export function EfficiencyPage() {
                   />
                 </label>
               </div>
-              {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
-              <EditablePersonTable rows={personRows} hiddenColumns={["è€ƒå‹¤æ—¶é•¿", "æœ‰æ•ˆå·¥æ—¶å æ¯”"]} />
+              {activePersonEfficiency.length ? (
+                <>
+                  {personName !== "All People" && <PersonEfficiencyChart rows={activePersonEfficiency} personName={personName} />}
+                  <EditablePersonTable rows={personRows} hiddenColumns={["è€ƒå‹¤æ—¶é•¿", "æœ‰æ•ˆå·¥æ—¶å æ¯”"]} />
+                </>
+              ) : (
+                <div className="empty">No people match the current search.</div>
+              )}
             </div>
           )}
 
-          {!!activePickingGantt.length && (
+          {!!basePickingGantt.length && (
             <div className="panel">
               <div className="table-head">
                 <h2>Per-Person Picking Gantt</h2>
               </div>
-              <PickingGanttChart rows={pickingGanttRows} groupByDate={personName !== "All People"} />
+              {activePickingGantt.length ? (
+                <PickingGanttChart rows={pickingGanttRows} groupByDate={personName !== "All People"} />
+              ) : (
+                <div className="empty">No Gantt rows match the current search.</div>
+              )}
             </div>
           )}
 
-          {pickingData && !activePersonEfficiency.length && !activePickingGantt.length && (
+          {pickingData && !basePersonEfficiency.length && !basePickingGantt.length && (
             <div className="empty">No picking data found for the selected upload or date range.</div>
           )}
         </>
