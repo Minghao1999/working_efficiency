@@ -184,6 +184,11 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   }
   const qtyMap = new Map();
   for (const [key, items] of groupBy(unique, (r) => `${r.日期}|${r.工号}`)) qtyMap.set(key, sum(items, (r) => r.实际拣货量));
+  const pickingGantt = buildPickingGantt(pick);
+  const ganttWorkMap = new Map();
+  for (const [key, rows] of groupBy(pickingGantt.filter((r) => ["work", "burst"].includes(r.type)), (r) => `${r.date}|${r.employeeNo}`)) {
+    ganttWorkMap.set(key, sum(rows, (r) => r.duration));
+  }
   const timeMap = new Map();
   const totalSpanMap = new Map();
   const taskEvents = [];
@@ -191,20 +196,29 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const [日期, 工号] = taskKey.split("|");
     const starts = items.map((r) => parseDate(r.拣货开始时间)).filter(Boolean);
     const ends = items.map((r) => parseDate(r.拣货完成时间)).filter(Boolean);
-    const end = ends.sort((a, b) => b - a)[0];
-    if (!end) continue;
-    const start = clampPickingStartToCompletionDate(starts.sort((a, b) => a - b)[0] || end, end);
-    taskEvents.push({ 日期, 工号, start, end, _taskKey: taskKey });
+    if (!ends.length) continue;
+    const sortedEnds = ends.sort((a, b) => a - b);
+    const firstEnd = sortedEnds[0];
+    const lastEnd = sortedEnds[sortedEnds.length - 1];
+    const pickingMinutes = pickingMinutesForRows(items);
+    const sameCompletionEnd = items.length > 1 && firstEnd.getTime() === lastEnd.getTime()
+      ? new Date(firstEnd.getTime() + pickingMinutes * 60 * 1000)
+      : null;
+    let start = sameCompletionEnd ? firstEnd : clampPickingStartToCompletionDate(starts.sort((a, b) => a - b)[0] || lastEnd, lastEnd);
+    let end = sameCompletionEnd || lastEnd;
+    if (end <= start) end = new Date(start.getTime() + 60 * 1000);
+    taskEvents.push({ 日期, 工号, start, end, isBurst: Boolean(sameCompletionEnd), _taskKey: taskKey });
   }
   for (const [key, items] of groupBy(taskEvents, (r) => `${r.日期}|${r.工号}`)) {
     const sorted = items.sort((a, b) => a.end - b.end || a.start - b.start || String(a._taskKey || "").localeCompare(String(b._taskKey || "")));
     let hours = 0;
     for (let i = 0; i < sorted.length; i++) {
       const task = sorted[i];
-      const taskSeconds = Math.min(1200, Math.max(0, (task.end - task.start) / 1000));
+      const taskSeconds = Math.max(0, (task.end - task.start) / 1000);
+      const cappedTaskSeconds = task.isBurst ? taskSeconds : Math.min(1200, taskSeconds);
       const next = sorted[i + 1];
       const interval = next && next.start > task.end ? Math.min(1200, Math.max(0, (next.start - task.end) / 1000)) : 0;
-      hours += (taskSeconds + interval) / 3600;
+      hours += (cappedTaskSeconds + interval) / 3600;
     }
     timeMap.set(key, hours);
     const firstStart = sorted.map((task) => task.start).filter(Boolean).sort((a, b) => a - b)[0];
@@ -231,7 +245,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const 总件数 = rawMap.get(key) || 0;
     const hasAttendance = attMap.has(key);
     const 考勤时长 = hasAttendance ? attMap.get(key) || 0 : "";
-    const rawEffectiveHours = timeMap.get(key) || 0;
+    const rawEffectiveHours = ganttWorkMap.get(key) || 0;
     const effectiveCap = hasAttendance && 考勤时长 ? Math.min(考勤时长, 8) : rawEffectiveHours;
     const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
@@ -252,7 +266,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
       低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : ""
     };
   }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
-  return { personEfficiency, pickingGantt: buildPickingGantt(pick) };
+  return { personEfficiency, pickingGantt };
 }
 
 function clampPickingStartToCompletionDate(start, end) {
@@ -285,6 +299,11 @@ function totalDurationHours(start, end) {
   return Math.max(0, (end - start) / 3600000 - (lunch ? 0.5 : 0));
 }
 
+function pickingMinutesForRows(rows) {
+  const qty = sum(rows, (r) => r.实际拣货量);
+  return Math.max(1, qty || rows.length);
+}
+
 function buildPickingGantt(pick) {
   const rows = [];
   for (const [personKey, personRows] of groupBy(pick, (r) => `${r.日期}|${r.工号}`)) {
@@ -301,8 +320,9 @@ function buildPickingGantt(pick) {
       const sortedCompletions = completions.sort((a, b) => a - b);
       const firstCompletion = sortedCompletions[0];
       const lastCompletion = sortedCompletions[sortedCompletions.length - 1];
+      const pickingMinutes = pickingMinutesForRows(sorted);
       const sameCompletionEnd = sorted.length > 1 && firstCompletion.getTime() === lastCompletion.getTime()
-        ? new Date(firstCompletion.getTime() + sorted.length * 60 * 1000)
+        ? new Date(firstCompletion.getTime() + pickingMinutes * 60 * 1000)
         : null;
 
       let startPick;
@@ -329,8 +349,9 @@ function buildPickingGantt(pick) {
         const [mostCommonEndMs, maxCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
         if (maxCount / sorted.length >= 0.8) {
           const commonEnd = new Date(Number(mostCommonEndMs));
+          const commonRows = sorted.filter((r) => r.拣货完成时间?.getTime() === commonEnd.getTime());
           startPick = commonEnd;
-          endPick = new Date(commonEnd.getTime() + maxCount * 60 * 1000);
+          endPick = new Date(commonEnd.getTime() + pickingMinutesForRows(commonRows) * 60 * 1000);
           isBurst = true;
         } else {
           startPick = firstCompletion;
@@ -338,7 +359,7 @@ function buildPickingGantt(pick) {
         }
       }
 
-      if (startPick && endPick && endPick > startPick) {
+      if (startPick && endPick && endPick >= startPick) {
         const receive = clampPickingStartToCompletionDate(rawReceive, endPick);
         startPick = clampPickingStartToCompletionDate(startPick, endPick);
         taskGroups.push({ receive, startPick, firstCompletion, endPick, isBurst, taskGroupKey, sourceKey: sorted[0]?._source_key || "" });
