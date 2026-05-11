@@ -23,6 +23,7 @@ async function readApiJson(response) {
 
 export function Home({ onNavigate }) {
   const [warehouse, setWarehouse] = useState("5");
+  const [rankingPeriod, setRankingPeriod] = useState("week");
   const [rankingData, setRankingData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -128,7 +129,24 @@ export function Home({ onNavigate }) {
               <Trophy size={20} />
               <span>Picking Efficiency Ranking</span>
             </div>
-            <p className="hint-line">Weighted by goods type: T25 / T50 = 1 small unit, all other types = 2.5 small units. Floor factor: L1 = 1, L2 = 1.1, L3 = 1.2, L4 = 1.3.</p>
+            <p className="hint-line">Goods type factor: T25 / T50 = 1 small unit, all other types = 2.5 small units. Floor factor: L1 = 1, L2 = 1.1, L3 = 1.2, L4 = 1.3.</p>
+            <p className="hint-line">Weighted Units = Non-Burst Units * Goods type factor* Floor factor</p>
+            <div className="ranking-period-toggle" role="group" aria-label="Ranking period">
+              <button
+                type="button"
+                className={rankingPeriod === "week" ? "active" : ""}
+                onClick={() => setRankingPeriod("week")}
+              >
+                Weekly
+              </button>
+              <button
+                type="button"
+                className={rankingPeriod === "month" ? "active" : ""}
+                onClick={() => setRankingPeriod("month")}
+              >
+                Monthly
+              </button>
+            </div>
           </div>
           <div className="overview-ranking-tools">
             <label className="date-query-warehouse">
@@ -148,15 +166,14 @@ export function Home({ onNavigate }) {
         {loading && <ProgressBar value={68} label="Loading cached picking rankings..." />}
         {error && <div className="error">{error}</div>}
         {rankingInProgress ? (
-          <div className="ranking-grid">
-            <RankingComingSoon title="Weekly Ranking" />
-            <RankingComingSoon title="Monthly Ranking" />
-          </div>
+          <RankingComingSoon title={rankingPeriod === "week" ? "Weekly Ranking" : "Monthly Ranking"} />
         ) : (
-          <div className="ranking-grid">
-            <RankingTable title="Weekly Ranking" ranking={rankingData?.week} onDelete={setPendingDelete} disabled={deleting || loading} />
-            <RankingTable title="Monthly Ranking" ranking={rankingData?.month} onDelete={setPendingDelete} disabled={deleting || loading} />
-          </div>
+          <RankingTable
+            title={rankingPeriod === "week" ? "Weekly Ranking" : "Monthly Ranking"}
+            ranking={rankingPeriod === "week" ? rankingData?.week : rankingData?.month}
+            onDelete={setPendingDelete}
+            disabled={deleting || loading}
+          />
         )}
       </section>
       <div className="landing-grid">
