@@ -22,6 +22,33 @@ function firstValue(row, candidates) {
   return null;
 }
 
+const GOODS_TYPE_COLUMNS = [
+  "\u8d27\u578b",
+  "è´§åž‹",
+  "goodsType",
+  "goods_type",
+  "sizeDefinition",
+  "cargoType",
+  "skuType",
+  "goodSizeType"
+];
+const FLOOR_WEIGHT = { L1: 1, L2: 1.1, L3: 1.2, L4: 1.3 };
+
+function floorFromLocation(value) {
+  const match = String(value || "").toUpperCase().match(/\bL\s*([1-4])\b|L\s*([1-4])/);
+  const floor = match?.[1] || match?.[2];
+  return floor ? `L${floor}` : "";
+}
+
+function floorWeight(value) {
+  return FLOOR_WEIGHT[floorFromLocation(value)] || 1;
+}
+
+function weightedPickingQty(qty, goodsType, location = "") {
+  const type = String(goodsType || "").trim().toUpperCase();
+  return num(qty, 0) * (type === "T25" || type === "T50" ? 1 : 2.5) * floorWeight(location);
+}
+
 function stableSourceKey(file, index) {
   const name = String(file?.originalname || file?.name || `file-${index}`).toLowerCase();
   const normalized = name
@@ -154,12 +181,16 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
       const taskStartKey = startTime ? String(startTime.getTime()) : "";
       const sourceRowIdx = r._source_row_idx ?? idx;
       const taskBase = taskNo ?? (taskStartKey || `row-${sourceRowIdx}`);
+      const goodsType = firstValue(r, GOODS_TYPE_COLUMNS);
+      const location = val(r, "å‚¨ä½") ?? val(r, "åº“ä½") ?? val(r, "储位") ?? val(r, "库位") ?? r._row_idx;
       return {
         ...r,
         拣货完成时间: parseDate(rawCompletionTime),
         _completion_day: dayKeyFromText(rawCompletionTime),
         拣货开始时间: startTime,
         _receive_time: receiveTime,
+        _goods_type: goodsType || "",
+        _weighted_picking_qty: weightedPickingQty(firstValue(r, ["实际拣货量", "拣货数量", "拣货件数", "件数"]), goodsType, location),
         实际拣货量: num(firstValue(r, ["实际拣货量", "拣货数量", "拣货件数", "件数"]), 0),
         工号: employeeNo || name,
         姓名: name,
@@ -184,6 +215,8 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
   }
   const qtyMap = new Map();
   for (const [key, items] of groupBy(unique, (r) => `${r.日期}|${r.工号}`)) qtyMap.set(key, sum(items, (r) => r.实际拣货量));
+  const weightedQtyMap = new Map();
+  for (const [key, items] of groupBy(unique, (r) => `${r.日期}|${r.工号}`)) weightedQtyMap.set(key, sum(items, (r) => r._weighted_picking_qty));
   const pickingGantt = buildPickingGantt(pick);
   const ganttWorkMap = new Map();
   for (const [key, rows] of groupBy(pickingGantt.filter((r) => ["work", "burst"].includes(r.type)), (r) => `${r.date}|${r.employeeNo}`)) {
@@ -250,6 +283,7 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
     const hasAttendance = attMap.has(key);
     const 考勤时长 = hasAttendance ? attMap.get(key) || 0 : "";
     const rawEffectiveHours = ganttWorkMap.get(key) || 0;
+    const weightedUnits = weightedQtyMap.get(key) || 0;
     const effectiveCap = hasAttendance && 考勤时长 ? Math.min(考勤时长, 8) : rawEffectiveHours;
     const 有效工时 = Math.min(rawEffectiveHours, effectiveCap);
     const 拣非爆品效率 = 有效工时 ? 件数 / 有效工时 : 0;
@@ -270,6 +304,14 @@ export function analyzePickRows(pickRows, iscFile = null, targetUpph = "", fallb
       低于目标: typeof targetUpph === "number" ? 拣非爆品效率 < targetUpph : ""
     };
   }).sort((a, b) => String(a.日期).localeCompare(String(b.日期)) || b.拣非爆品效率 - a.拣非爆品效率);
+  for (const row of personEfficiency) {
+    const keys = Object.keys(row);
+    const rowKey = `${row[keys[0]]}|${row[keys[1]]}`;
+    const weightedUnits = weightedQtyMap.get(rowKey) || 0;
+    const effectiveHours = num(row[keys[5]], 0);
+    row.weightedUnits = weightedUnits;
+    row.weightedEfficiency = effectiveHours ? weightedUnits / effectiveHours : 0;
+  }
   return { personEfficiency, pickingGantt };
 }
 

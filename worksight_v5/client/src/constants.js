@@ -31,6 +31,8 @@ export const COLUMN_LABELS = {
   删除: "Delete",
   上班时间: "Clock In",
   下班时间: "Clock Out",
+  weightedUnits: "Weighted Units",
+  weightedEfficiency: "Weighted Efficiency",
   employee_no: "Employee ID",
   real_name: "Name",
   操作分类: "Category",

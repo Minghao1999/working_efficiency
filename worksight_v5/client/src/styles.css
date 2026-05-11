@@ -220,6 +220,199 @@ main {
   letter-spacing: 0;
 }
 
+.ranking-panel {
+  height: min(760px, calc(100vh - 130px));
+  min-height: 560px;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.overview-ranking-tools {
+  display: grid;
+  grid-template-columns: minmax(190px, 220px) max-content;
+  align-items: end;
+  gap: 10px;
+}
+
+.overview-ranking-tools .primary-btn,
+.overview-ranking-tools .ghost-btn {
+  margin-top: 0;
+  min-height: 42px;
+}
+
+.ranking-range {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0 14px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.ranking-range svg {
+  color: #5f7fae;
+}
+
+.ranking-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+  align-items: start;
+  gap: 14px;
+}
+
+.ranking-card {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ranking-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ranking-card-head h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 18px;
+}
+
+.ranking-card-head span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ranking-callouts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ranking-callout {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(2, 122, 72, 0.18);
+  border-radius: 10px;
+  background: rgba(236, 253, 243, 0.58);
+  padding: 10px;
+}
+
+.ranking-callout.muted {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: rgba(254, 243, 242, 0.56);
+}
+
+.ranking-callout span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #027a48;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.ranking-callout.muted span {
+  color: #b42318;
+}
+
+.ranking-callout strong {
+  min-width: 0;
+  color: #111827;
+  overflow-wrap: anywhere;
+}
+
+.ranking-callout small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.rank-first td {
+  background: rgba(236, 253, 243, 0.58);
+  font-weight: 800;
+}
+
+.rank-last td {
+  background: rgba(254, 243, 242, 0.56);
+}
+
+.ranking-delete-col {
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+}
+
+.ranking-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+}
+
+.ranking-delete-btn:hover:not(:disabled) {
+  border-color: #fecdca;
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.ranking-delete-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ranking-card .table-wrap {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.ranking-coming-soon {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.ranking-coming-soon-body {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 0;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #667085;
+  text-align: center;
+}
+
+.ranking-coming-soon-body svg {
+  color: #94a3b8;
+}
+
+.ranking-coming-soon-body strong {
+  color: #111827;
+  font-size: 20px;
+}
+
+.ranking-coming-soon-body span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .source-list {
   display: grid;
   gap: 5px;
@@ -1411,8 +1604,19 @@ tbody tr:last-child td { border-bottom: 0; }
   .field-grid,
   .download-hero,
   .picking-layout,
+  .ranking-grid,
   .feedback-layout {
     grid-template-columns: 1fr;
+  }
+
+  .ranking-panel {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .ranking-card {
+    height: min(620px, calc(100vh - 170px));
   }
 }
 
@@ -1445,6 +1649,12 @@ tbody tr:last-child td { border-bottom: 0; }
   .table-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .overview-ranking-tools,
+  .ranking-callouts {
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .file-picker {

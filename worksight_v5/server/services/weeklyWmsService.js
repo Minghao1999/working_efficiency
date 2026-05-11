@@ -17,9 +17,18 @@ const TARGET_UPPH_BY_WAREHOUSE = {
   "2": 37.11,
   "5": 11.3
 };
+const DEFAULT_RANKING_WAREHOUSES = ["1", "2", "5"];
+const RANKING_SCHEMA_VERSION = 9;
+const FLOOR_WEIGHT = { L1: 1, L2: 1.1, L3: 1.2, L4: 1.3 };
+const HOUR_MS = 60 * 60 * 1000;
+let rankingSchedulerTimer;
 
 function pad(value) {
   return String(value).padStart(2, "0");
+}
+
+function formatDate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function normalizeDateRange(from, to) {
@@ -35,7 +44,6 @@ function normalizeDateRange(from, to) {
     error.status = 400;
     throw error;
   }
-  const formatDate = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   return {
     startDate: formatDate(start),
     endDate: formatDate(end),
@@ -150,8 +158,30 @@ async function unitCacheCollection() {
 
 async function pickingCacheCollection() {
   const db = await getDb();
-  const collection = db.collection("weekly_picking_daily_cache");
+  const collection = db.collection("weekly_picking_daily_cache_v3");
   await collection.createIndex({ warehouseKey: 1, businessDate: 1 }, { unique: true });
+  return collection;
+}
+
+async function pickingRankingCacheCollection() {
+  const db = await getDb();
+  const collection = db.collection("weekly_picking_ranking_cache");
+  await collection.createIndex({ warehouseKey: 1, period: 1, startDate: 1, endDate: 1 }, { unique: true });
+  return collection;
+}
+
+async function pickingRankingJobCollection() {
+  const db = await getDb();
+  const collection = db.collection("weekly_picking_ranking_jobs");
+  await collection.createIndex({ jobKey: 1 }, { unique: true });
+  return collection;
+}
+
+async function pickingRankingExclusionCollection() {
+  const db = await getDb();
+  const collection = db.collection("weekly_picking_ranking_exclusions");
+  await collection.createIndex({ employeeNo: 1 }, { unique: true, sparse: true });
+  await collection.createIndex({ name: 1 }, { sparse: true });
   return collection;
 }
 
@@ -474,6 +504,7 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
 
 function normalizePickingRows(rows) {
   return (rows || []).map((row) => ({
+    ...row,
     _source_key: row._source_key || "wms",
     拣货完成时间: readAny(row, ["拣货完成时间", "updateTime", "update_time", "pickingDate", "pickingTime"]),
     拣货开始时间: readAny(row, ["拣货开始时间", "fetchTime", "fetch_time", "startTime", "start_time", "createTime"]),
@@ -484,7 +515,8 @@ function normalizePickingRows(rows) {
     姓名: readAny(row, ["姓名", "workerName", "worker_name", "updateUser", "update_user", "employeeName", "employeeNo"]) || "",
     集合单号: readAny(row, ["集合单号", "任务单号", "taskPageNo", "task_page_no", "outboundNo", "waveNo", "wave_no", "batchNo", "bigWaveNo"]),
     任务单号: readAny(row, ["任务单号", "集合单号", "taskPageNo", "task_page_no", "outboundNo", "waveNo", "wave_no", "batchNo", "bigWaveNo"]),
-    储位: readAny(row, ["储位", "库位", "cellNo", "cell_no", "containerNo", "goodsNo", "outboundNo"])
+    储位: readAny(row, ["储位", "库位", "cellNo", "cell_no", "containerNo", "goodsNo", "outboundNo"]),
+    "\u8d27\u578b": readAny(row, ["\u8d27\u578b", "??????", "goodsType", "goods_type", "sizeDefinition", "cargoType", "skuType", "productType", "goodSizeType"])
   }));
 }
 
@@ -557,4 +589,370 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     bigWaveRawCount: bigWaveRows.length,
     cacheStatus
   };
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function previousWeekRange(now = new Date()) {
+  const current = new Date(now);
+  current.setHours(0, 0, 0, 0);
+  const day = current.getDay() || 7;
+  const thisWeekStart = addDays(current, 1 - day);
+  return {
+    startDate: formatDate(addDays(thisWeekStart, -7)),
+    endDate: formatDate(addDays(thisWeekStart, -1))
+  };
+}
+
+function previousMonthRange(now = new Date()) {
+  const current = new Date(now);
+  return {
+    startDate: formatDate(new Date(current.getFullYear(), current.getMonth() - 1, 1)),
+    endDate: formatDate(new Date(current.getFullYear(), current.getMonth(), 0))
+  };
+}
+
+function firstPickValue(row, candidates) {
+  return readAny(row, candidates);
+}
+
+function personEfficiencyBasics(row) {
+  const keys = Object.keys(row || {});
+  return {
+    employeeNo: row?.["\u5de5\u53f7"] ?? row?.[keys[1]] ?? "",
+    name: row?.["\u59d3\u540d"] ?? row?.[keys[2]] ?? "",
+    hours: num(row?.hours ?? row?.effectiveHours ?? row?.["\u6709\u6548\u5de5\u65f6"] ?? row?.[keys[5]], 0),
+    weightedUnits: num(row?.weightedUnits, 0)
+  };
+}
+
+function floorFromLocation(value) {
+  const match = String(value || "").toUpperCase().match(/\bL\s*([1-4])\b|L\s*([1-4])/);
+  const floor = match?.[1] || match?.[2];
+  return floor ? `L${floor}` : "";
+}
+
+function floorWeightFromLocation(value) {
+  return FLOOR_WEIGHT[floorFromLocation(value)] || 1;
+}
+
+function goodsKind(value) {
+  const type = String(value || "").trim().toUpperCase();
+  return type === "T25" || type === "T50" ? "small" : "large";
+}
+
+function percent(part, total) {
+  return total ? (part / total) * 100 : 0;
+}
+
+function buildPickingRankingRows(personEfficiency, pickRows = []) {
+  const byPerson = new Map();
+  for (const row of personEfficiency || []) {
+    const item = personEfficiencyBasics(row);
+    const key = String(item.employeeNo || item.name || "").trim();
+    if (!key) continue;
+    const current = byPerson.get(key) || {
+      employeeNo: item.employeeNo,
+      name: item.name,
+      weightedUnits: 0,
+      hours: 0
+    };
+    current.weightedUnits += item.weightedUnits;
+    current.hours += item.hours;
+    byPerson.set(key, current);
+  }
+
+  const spanByPersonDay = new Map();
+  const mixByPerson = new Map();
+  for (const row of pickRows || []) {
+    const completion = parseDate(firstPickValue(row, ["\u62e3\u8d27\u5b8c\u6210\u65f6\u95f4", "updateTime", "update_time", "pickingDate", "pickingTime"]));
+    if (!completion) continue;
+    const employeeNo = identityText(firstPickValue(row, ["\u5de5\u53f7", "\u5458\u5de5\u53f7", "employeeNo", "employee_no", "email", "workerName", "updateUser"]));
+    const name = identityText(firstPickValue(row, ["\u59d3\u540d", "workerName", "worker_name", "updateUser", "update_user", "employeeName", "employeeNo"]));
+    const key = identityText(employeeNo || name);
+    if (!key || !byPerson.has(key)) continue;
+    const spanKey = `${key}|${dayKey(completion) || ""}`;
+    const current = spanByPersonDay.get(spanKey) || { personKey: key, first: completion, last: completion };
+    if (completion < current.first) current.first = completion;
+    if (completion > current.last) current.last = completion;
+    spanByPersonDay.set(spanKey, current);
+
+    const qty = num(firstPickValue(row, ["\u5b9e\u9645\u62e3\u8d27\u91cf", "\u62e3\u8d27\u6570\u91cf", "\u62e3\u8d27\u4ef6\u6570", "pickingQty", "GOODS_SUM", "goodsSum", "locateQty", "qty", "quantity"]), 0);
+    const location = firstPickValue(row, ["\u50a8\u4f4d", "\u5e93\u4f4d", "cellNo", "cell_no", "containerNo", "goodsNo", "outboundNo"]);
+    const cargoKind = goodsKind(firstPickValue(row, ["\u8d27\u578b", "goodsType", "goods_type", "sizeDefinition", "cargoType", "skuType", "productType", "goodSizeType"]));
+    const weightedQty = qty * (cargoKind === "small" ? 1 : 2.5) * floorWeightFromLocation(location);
+    const mix = mixByPerson.get(key) || {
+      totalQty: 0,
+      weightedUnits: 0,
+      floorQty: { L1: 0, L2: 0, L3: 0, L4: 0 },
+      smallQty: 0,
+      largeQty: 0
+    };
+    const floor = floorFromLocation(location);
+    if (floor) mix.floorQty[floor] += qty;
+    if (cargoKind === "small") mix.smallQty += qty;
+    else mix.largeQty += qty;
+    mix.totalQty += qty;
+    mix.weightedUnits += weightedQty;
+    mixByPerson.set(key, mix);
+  }
+
+  const hoursByPerson = new Map();
+  for (const span of spanByPersonDay.values()) {
+    hoursByPerson.set(
+      span.personKey,
+      (hoursByPerson.get(span.personKey) || 0) + Math.max(0, (span.last - span.first) / 3600000)
+    );
+  }
+
+  for (const [key, hours] of hoursByPerson.entries()) {
+    const current = byPerson.get(key);
+    if (current) current.hours = hours;
+  }
+
+  return [...byPerson.values()]
+    .map((row) => {
+      const mix = mixByPerson.get(String(row.employeeNo || row.name || "").trim()) || {
+        totalQty: 0,
+        weightedUnits: row.weightedUnits,
+        floorQty: { L1: 0, L2: 0, L3: 0, L4: 0 },
+        smallQty: 0,
+        largeQty: 0
+      };
+      const weightedUnits = mix.totalQty ? mix.weightedUnits : row.weightedUnits;
+      return {
+        rank: 0,
+        employeeNo: row.employeeNo,
+        name: row.name,
+        weightedUnits,
+        hours: row.hours,
+        effectiveHours: row.hours,
+        efficiency: row.hours ? weightedUnits / row.hours : 0,
+        l1Percent: percent(mix.floorQty.L1, mix.totalQty),
+        l2Percent: percent(mix.floorQty.L2, mix.totalQty),
+        l3Percent: percent(mix.floorQty.L3, mix.totalQty),
+        l4Percent: percent(mix.floorQty.L4, mix.totalQty),
+        smallPercent: percent(mix.smallQty, mix.totalQty),
+        largePercent: percent(mix.largeQty, mix.totalQty),
+        mainCargo: mix.largeQty > mix.smallQty ? "Large" : mix.smallQty > mix.largeQty ? "Small" : "Mixed"
+      };
+    })
+    .filter((row) => row.weightedUnits > 0 || row.hours > 0)
+    .sort((a, b) => b.efficiency - a.efficiency || b.weightedUnits - a.weightedUnits)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+function identityText(value) {
+  return String(value || "").trim();
+}
+
+function exclusionKeys(row) {
+  return [
+    identityText(row?.employeeNo).toLowerCase(),
+    identityText(row?.name).toLowerCase()
+  ].filter(Boolean);
+}
+
+function isExcludedRankingRow(row, excluded) {
+  return exclusionKeys(row).some((key) => excluded.has(key));
+}
+
+function rerankRows(rows) {
+  return [...(rows || [])]
+    .sort((a, b) => b.efficiency - a.efficiency || b.weightedUnits - a.weightedUnits)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+async function readRankingExclusions() {
+  const collection = await pickingRankingExclusionCollection();
+  const docs = await collection.find({}).project({ _id: 0, employeeNo: 1, name: 1 }).toArray();
+  return new Set(docs.flatMap(exclusionKeys));
+}
+
+async function filterExcludedRankingRows(rows) {
+  const excluded = await readRankingExclusions();
+  if (!excluded.size) return rows || [];
+  return rerankRows((rows || []).filter((row) => !isExcludedRankingRow(row, excluded)));
+}
+
+async function filterRankingDoc(doc) {
+  if (!doc) return doc;
+  return { ...doc, rows: await filterExcludedRankingRows(doc.rows || []) };
+}
+
+function rankingDocPayload({ period, warehouseKey, warehouseNo, startDate, endDate, rows, source, rawCount }) {
+  return {
+    schemaVersion: RANKING_SCHEMA_VERSION,
+    period,
+    warehouseKey,
+    warehouseNo,
+    startDate,
+    endDate,
+    rows,
+    source,
+    rawCount,
+    updatedAt: new Date()
+  };
+}
+
+export async function getOrCreatePickingRanking({ period, from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, forceRefresh = false } = {}) {
+  const warehouseKey = String(warehouse || "5").trim();
+  const cleanWarehouseNo = resolveWarehouseNo(warehouseKey, warehouseNo);
+  const startDate = from;
+  const endDate = to;
+  const collection = await pickingRankingCacheCollection();
+  const filter = { warehouseKey, period, startDate, endDate };
+
+  if (!forceRefresh) {
+    const cached = await collection.findOne(filter, { projection: { _id: 0 } });
+    if (cached?.schemaVersion === RANKING_SCHEMA_VERSION) return { ...(await filterRankingDoc(cached)), source: "database" };
+  }
+
+  const analysis = await queryPickingData({
+    from: startDate,
+    to: endDate,
+    warehouse: warehouseKey,
+    warehouseNo: cleanWarehouseNo,
+    targetUpph: TARGET_UPPH_BY_WAREHOUSE[warehouseKey] || "",
+    includeBigWavePick: false
+  });
+  const cachedPickRows = await readCachedPickingRows({ warehouseKey, dates: dateKeysBetween(startDate, endDate) });
+  const sourceRows = filterPickingRowsByRequestedDates(normalizePickingRows(cachedPickRows.rows || []), dateKeysBetween(startDate, endDate));
+  const rows = await filterExcludedRankingRows(buildPickingRankingRows(analysis.personEfficiency || [], sourceRows));
+  const payload = rankingDocPayload({
+    period,
+    warehouseKey,
+    warehouseNo: cleanWarehouseNo,
+    startDate,
+    endDate,
+    rows,
+    source: analysis.source,
+    rawCount: analysis.rawCount || 0
+  });
+
+  await collection.updateOne(
+    filter,
+    { $set: payload, $setOnInsert: { createdAt: new Date() } },
+    { upsert: true }
+  );
+
+  return { ...payload, source: "api" };
+}
+
+export async function queryPickingRankings({ warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, now = new Date() } = {}) {
+  const weekly = previousWeekRange(now);
+  const monthly = previousMonthRange(now);
+  const [week, month] = await Promise.all([
+    getOrCreatePickingRanking({ period: "week", from: weekly.startDate, to: weekly.endDate, warehouse, warehouseNo }),
+    getOrCreatePickingRanking({ period: "month", from: monthly.startDate, to: monthly.endDate, warehouse, warehouseNo })
+  ]);
+  return { week, month };
+}
+
+export async function excludePickingRankingPerson({ employeeNo, name } = {}) {
+  const cleanEmployeeNo = identityText(employeeNo);
+  const cleanName = identityText(name);
+  if (!cleanEmployeeNo && !cleanName) {
+    const error = new Error("Missing employee identifier.");
+    error.status = 400;
+    throw error;
+  }
+
+  const exclusions = await pickingRankingExclusionCollection();
+  const now = new Date();
+  const filter = cleanEmployeeNo ? { employeeNo: cleanEmployeeNo } : { name: cleanName };
+  await exclusions.updateOne(
+    filter,
+    {
+      $set: {
+        employeeNo: cleanEmployeeNo,
+        name: cleanName,
+        updatedAt: now
+      },
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+
+  const rankingCache = await pickingRankingCacheCollection();
+  const docs = await rankingCache.find({
+    $or: [
+      cleanEmployeeNo ? { "rows.employeeNo": cleanEmployeeNo } : null,
+      cleanName ? { "rows.name": cleanName } : null
+    ].filter(Boolean)
+  }).toArray();
+  const excluded = await readRankingExclusions();
+
+  for (const doc of docs) {
+    const rows = rerankRows((doc.rows || []).filter((row) => !isExcludedRankingRow(row, excluded)));
+    await rankingCache.updateOne(
+      { _id: doc._id },
+      { $set: { rows, updatedAt: now } }
+    );
+  }
+
+  return { ok: true, removedFromCachedRankings: docs.length };
+}
+
+async function claimRankingJob(jobKey) {
+  const collection = await pickingRankingJobCollection();
+  try {
+    await collection.insertOne({ jobKey, createdAt: new Date() });
+    return true;
+  } catch (error) {
+    if (error?.code === 11000) return false;
+    throw error;
+  }
+}
+
+async function runScheduledRankingJob(now = new Date()) {
+  const day = now.getDay();
+  const date = now.getDate();
+  const tasks = [];
+
+  if (day === 1) {
+    const range = previousWeekRange(now);
+    for (const warehouse of DEFAULT_RANKING_WAREHOUSES) {
+      tasks.push({ period: "week", warehouse, ...range });
+    }
+  }
+
+  if (date === 1) {
+    const range = previousMonthRange(now);
+    for (const warehouse of DEFAULT_RANKING_WAREHOUSES) {
+      tasks.push({ period: "month", warehouse, ...range });
+    }
+  }
+
+  for (const task of tasks) {
+    const jobKey = `${task.period}|${task.warehouse}|${task.startDate}|${task.endDate}`;
+    if (!(await claimRankingJob(jobKey))) continue;
+    await getOrCreatePickingRanking({
+      period: task.period,
+      from: task.startDate,
+      to: task.endDate,
+      warehouse: task.warehouse,
+      forceRefresh: true
+    });
+    console.log("Picking ranking cached", jobKey);
+  }
+}
+
+export function startPickingRankingScheduler() {
+  if (rankingSchedulerTimer) return;
+
+  const run = async () => {
+    try {
+      await runScheduledRankingJob();
+    } catch (error) {
+      console.warn("Picking ranking scheduler skipped:", error.message);
+    }
+  };
+
+  setTimeout(run, 15_000).unref?.();
+  rankingSchedulerTimer = setInterval(run, HOUR_MS);
+  rankingSchedulerTimer.unref?.();
 }

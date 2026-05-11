@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { analyzeWeekly } from "../services/weeklyService.js";
-import { queryPickingData, queryUnitData } from "../services/weeklyWmsService.js";
+import { excludePickingRankingPerson, queryPickingData, queryPickingRankings, queryUnitData } from "../services/weeklyWmsService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -43,6 +43,24 @@ router.post("/query-picking", async (req, res) => {
   try {
     const { from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick } = req.body || {};
     res.json(await queryPickingData({ from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings", async (req, res) => {
+  try {
+    const { warehouse, warehouseNo } = req.body || {};
+    res.json(await queryPickingRankings({ warehouse, warehouseNo }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/exclude", async (req, res) => {
+  try {
+    const { employeeNo, name } = req.body || {};
+    res.json(await excludePickingRankingPerson({ employeeNo, name }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }

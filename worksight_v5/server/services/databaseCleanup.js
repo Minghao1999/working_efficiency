@@ -18,7 +18,7 @@ export async function cleanupOldDatabaseData(now = new Date()) {
   const db = await getDb();
   const cutoff = retentionCutoff(now);
 
-  const [feedback, unitCache, pickingCache] = await Promise.all([
+  const [feedback, unitCache, pickingCache, pickingCacheV2, pickingRankingCache] = await Promise.all([
     db.collection("feedback").deleteMany({ createdAt: { $lt: cutoff.iso } }),
     db.collection("weekly_unit_daily_cache").deleteMany({
       $or: [
@@ -31,6 +31,15 @@ export async function cleanupOldDatabaseData(now = new Date()) {
         { businessDate: { $lt: cutoff.day } },
         { businessDate: { $exists: false }, createdAt: { $lt: cutoff.date } }
       ]
+    }),
+    db.collection("weekly_picking_daily_cache_v2").deleteMany({
+      $or: [
+        { businessDate: { $lt: cutoff.day } },
+        { businessDate: { $exists: false }, createdAt: { $lt: cutoff.date } }
+      ]
+    }),
+    db.collection("weekly_picking_ranking_cache").deleteMany({
+      endDate: { $lt: cutoff.day }
     })
   ]);
 
@@ -39,7 +48,9 @@ export async function cleanupOldDatabaseData(now = new Date()) {
     deleted: {
       feedback: feedback.deletedCount,
       weeklyUnitDailyCache: unitCache.deletedCount,
-      weeklyPickingDailyCache: pickingCache.deletedCount
+      weeklyPickingDailyCache: pickingCache.deletedCount,
+      weeklyPickingDailyCacheV2: pickingCacheV2.deletedCount,
+      weeklyPickingRankingCache: pickingRankingCache.deletedCount
     }
   };
 }
