@@ -416,7 +416,7 @@ export function EfficiencyPage() {
               <div>iAMS Attendance: iAMS班次明细 · Optional</div>
               <div>Volume Data: iWMS 销售单综合查询 · Optional</div>
               <div>Punch Data: iAMS 打卡流水 · Optional</div>
-              <div>算力不足，最好一个文件一个文件上传，谢谢！</div>
+              <div>算力很足，可以多个文件一起上传！</div>
             </div>
             <FilePicker multiple accept=".xlsx,.xls" files={files} onChange={addEfficiencyFiles} />
             <SelectedFileList files={files} onRemove={removeEfficiencyFile} />
