@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { analyzeWeekly } from "../services/weeklyService.js";
-import { excludePickingRankingPerson, queryPickingData, queryPickingRankings, queryUnitData } from "../services/weeklyWmsService.js";
+import { excludePickingRankingPerson, mergePickingRankingEmployee, queryPickingData, queryPickingRankings, queryUnitData, updatePickingRankingEmployeeName } from "../services/weeklyWmsService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -52,8 +52,8 @@ router.post("/query-picking", async (req, res) => {
 
 router.post("/picking-rankings", async (req, res) => {
   try {
-    const { warehouse, warehouseNo } = req.body || {};
-    res.json(await queryPickingRankings({ warehouse, warehouseNo }));
+    const { warehouse, warehouseNo, forceRefresh, period } = req.body || {};
+    res.json(await queryPickingRankings({ warehouse, warehouseNo, forceRefresh, period }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }
@@ -63,6 +63,22 @@ router.post("/picking-rankings/exclude", async (req, res) => {
   try {
     const { employeeNo, name } = req.body || {};
     res.json(await excludePickingRankingPerson({ employeeNo, name }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/merge-employee", async (req, res) => {
+  try {
+    res.json(await mergePickingRankingEmployee(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/update-name", async (req, res) => {
+  try {
+    res.json(await updatePickingRankingEmployeeName(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }

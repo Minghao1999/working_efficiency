@@ -278,7 +278,7 @@ export function DateRangeQuery({ value, onChange, onQuery, disabled = false }) {
   );
 }
 
-export function ConfirmDialog({ title, message, onCancel, onConfirm }) {
+export function ConfirmDialog({ title, message, confirmLabel = "Delete", confirmClassName = "danger-btn", onCancel, onConfirm }) {
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -286,7 +286,7 @@ export function ConfirmDialog({ title, message, onCancel, onConfirm }) {
         <p>{message}</p>
         <div className="modal-actions">
           <button className="ghost-btn" onClick={onCancel}>Cancel</button>
-          <button className="danger-btn" onClick={onConfirm}>Delete</button>
+          <button className={confirmClassName} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </div>
     </div>

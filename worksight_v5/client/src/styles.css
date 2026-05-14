@@ -221,11 +221,11 @@ main {
 }
 
 .ranking-panel {
-  height: min(760px, calc(100vh - 130px));
-  min-height: 560px;
+  height: min(860px, calc(100vh - 92px));
+  min-height: 600px;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   overflow: hidden;
 }
 
@@ -247,7 +247,7 @@ main {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 14px;
-  margin: 8px 0 14px;
+  margin: 4px 0 8px;
   color: #667085;
   font-size: 13px;
   font-weight: 720;
@@ -292,7 +292,7 @@ main {
 .ranking-card {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 6px;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -320,16 +320,16 @@ main {
 .ranking-callouts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 6px;
 }
 
 .ranking-callout {
   display: grid;
-  gap: 4px;
+  gap: 1px;
   border: 1px solid rgba(2, 122, 72, 0.18);
   border-radius: 10px;
   background: rgba(236, 253, 243, 0.58);
-  padding: 10px;
+  padding: 5px 8px;
 }
 
 .ranking-callout.muted {
@@ -354,11 +354,14 @@ main {
   min-width: 0;
   color: #111827;
   overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.12;
 }
 
 .ranking-callout small {
   color: #667085;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.1;
 }
 
 .rank-first td {
@@ -371,8 +374,8 @@ main {
 }
 
 .ranking-delete-col {
-  width: 36px;
-  min-width: 36px;
+  width: 28px;
+  min-width: 28px;
   text-align: center;
 }
 
@@ -380,10 +383,10 @@ main {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: #98a2b3;
   cursor: pointer;
@@ -400,10 +403,56 @@ main {
   opacity: 0.45;
 }
 
+.ranking-employee-input,
+.ranking-name-input {
+  width: 92px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  padding: 1px 4px;
+}
+
+.ranking-name-input {
+  width: 128px;
+}
+
+.ranking-employee-input:hover:not(:disabled),
+.ranking-employee-input:focus,
+.ranking-name-input:hover:not(:disabled),
+.ranking-name-input:focus {
+  border-color: #bfdbfe;
+  background: #ffffff;
+  outline: none;
+}
+
+.ranking-employee-input:disabled,
+.ranking-name-input:disabled {
+  opacity: 0.65;
+}
+
 .ranking-card .table-wrap {
   min-height: 0;
   max-height: none;
   overflow: auto;
+}
+
+.ranking-card .compact-table th,
+.ranking-card .compact-table td {
+  padding: 3px 6px;
+  font-size: 11px;
+  line-height: 1.12;
+}
+
+.ranking-card .compact-table th {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.ranking-card .compact-table tbody tr {
+  height: 28px;
 }
 
 .ranking-coming-soon {

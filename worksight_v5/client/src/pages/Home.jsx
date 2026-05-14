@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CalendarDays, FileSpreadsheet, Medal, MessageSquarePlus, Package, Trophy, Users, X } from "lucide-react";
 import { API } from "../constants";
 import { ConfirmDialog, GlassSelect, ProgressBar } from "../components/controls";
@@ -13,12 +13,138 @@ const WAREHOUSE_OPTIONS = [
 const HIDE_UNFINISHED_RANKINGS = import.meta.env.VITE_HIDE_UNFINISHED_RANKINGS
   ? import.meta.env.VITE_HIDE_UNFINISHED_RANKINGS === "true"
   : import.meta.env.PROD;
-const UNFINISHED_RANKING_WAREHOUSES = new Set(["1", "2"]);
+const UNFINISHED_RANKING_WAREHOUSES = new Set(["2"]);
 
 async function readApiJson(response) {
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return response.json();
   throw new Error(`API returned ${response.status || "non-JSON"} instead of JSON.`);
+}
+
+function cloneRankingData(data) {
+  return data ? JSON.parse(JSON.stringify(data)) : data;
+}
+
+function normalizeEmployeeId(value) {
+  const text = String(value || "").trim();
+  return (text.includes("@") ? text.split("@")[0] : text).toUpperCase();
+}
+
+function toNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function recalculateRankingRow(row) {
+  const pickingWeightedUnits = toNumber(row.pickingWeightedUnits ?? row.weightedUnits);
+  const pickingHours = toNumber(row.pickingHours ?? row.hours ?? row.effectiveHours);
+  const packingUnits = toNumber(row.packingUnits);
+  const packingHours = toNumber(row.packingHours);
+  const totalHours = pickingHours + packingHours;
+  return {
+    ...row,
+    weightedUnits: pickingWeightedUnits,
+    pickingWeightedUnits,
+    hours: pickingHours,
+    pickingHours,
+    effectiveHours: pickingHours,
+    packingUnits,
+    packingHours,
+    efficiency: totalHours ? (pickingWeightedUnits + packingUnits) / totalHours : 0
+  };
+}
+
+function mergeRankingRows(target, source) {
+  const targetPickingUnits = toNumber(target.pickingWeightedUnits ?? target.weightedUnits);
+  const sourcePickingUnits = toNumber(source.pickingWeightedUnits ?? source.weightedUnits);
+  const merged = {
+    ...target,
+    pickingWeightedUnits: targetPickingUnits + sourcePickingUnits,
+    weightedUnits: targetPickingUnits + sourcePickingUnits,
+    pickingHours: toNumber(target.pickingHours ?? target.hours ?? target.effectiveHours) + toNumber(source.pickingHours ?? source.hours ?? source.effectiveHours),
+    hours: toNumber(target.pickingHours ?? target.hours ?? target.effectiveHours) + toNumber(source.pickingHours ?? source.hours ?? source.effectiveHours),
+    effectiveHours: toNumber(target.pickingHours ?? target.hours ?? target.effectiveHours) + toNumber(source.pickingHours ?? source.hours ?? source.effectiveHours),
+    packingUnits: toNumber(target.packingUnits) + toNumber(source.packingUnits),
+    packingHours: toNumber(target.packingHours) + toNumber(source.packingHours)
+  };
+  if (!targetPickingUnits && sourcePickingUnits) {
+    merged.l1Percent = source.l1Percent;
+    merged.l2Percent = source.l2Percent;
+    merged.l3Percent = source.l3Percent;
+    merged.l4Percent = source.l4Percent;
+    merged.smallPercent = source.smallPercent;
+    merged.largePercent = source.largePercent;
+    merged.mainCargo = source.mainCargo;
+  }
+  return recalculateRankingRow(merged);
+}
+
+function rerankRows(rows) {
+  return [...rows]
+    .sort((a, b) => toNumber(b.efficiency) - toNumber(a.efficiency) || toNumber(b.pickingWeightedUnits ?? b.weightedUnits) - toNumber(a.pickingWeightedUnits ?? a.weightedUnits))
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+function mergeEmployeeInRanking(ranking, sourceRow, targetEmployeeNo) {
+  if (!ranking?.rows?.length) return ranking;
+  const rows = [...ranking.rows];
+  const sourceKey = normalizeEmployeeId(sourceRow.employeeNo);
+  const sourceName = String(sourceRow.name || "").trim().toLowerCase();
+  const targetKey = normalizeEmployeeId(targetEmployeeNo);
+  const sourceIndex = rows.findIndex((row) => (
+    normalizeEmployeeId(row.employeeNo) === sourceKey
+    || (!row.employeeNo && sourceName && String(row.name || "").trim().toLowerCase() === sourceName)
+  ));
+  const targetIndex = rows.findIndex((row) => normalizeEmployeeId(row.employeeNo) === targetKey);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return ranking;
+  const nextRows = rows.filter((_, index) => index !== sourceIndex);
+  const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  nextRows[adjustedTargetIndex] = mergeRankingRows(rows[targetIndex], rows[sourceIndex]);
+  return { ...ranking, rows: rerankRows(nextRows) };
+}
+
+function removePersonFromRankingData(data, person) {
+  if (!data || !person) return data;
+  const employeeKey = normalizeEmployeeId(person.employeeNo);
+  const nameKey = String(person.name || "").trim().toLowerCase();
+  const removeFromRanking = (ranking) => {
+    if (!ranking?.rows) return ranking;
+    return {
+      ...ranking,
+      rows: rerankRows(ranking.rows.filter((row) => {
+        const sameEmployee = employeeKey && normalizeEmployeeId(row.employeeNo) === employeeKey;
+        const sameName = nameKey && String(row.name || "").trim().toLowerCase() === nameKey;
+        return !sameEmployee && !sameName;
+      }))
+    };
+  };
+  return {
+    ...data,
+    week: removeFromRanking(data.week),
+    month: removeFromRanking(data.month)
+  };
+}
+
+function updatePersonNameInRankingData(data, person, name) {
+  if (!data || !person) return data;
+  const employeeKey = normalizeEmployeeId(person.employeeNo);
+  const oldNameKey = String(person.name || "").trim().toLowerCase();
+  const updateRanking = (ranking) => {
+    if (!ranking?.rows) return ranking;
+    return {
+      ...ranking,
+      rows: ranking.rows.map((row) => {
+        const sameEmployee = employeeKey && normalizeEmployeeId(row.employeeNo) === employeeKey;
+        const sameName = oldNameKey && String(row.name || "").trim().toLowerCase() === oldNameKey;
+        return sameEmployee || sameName ? { ...row, name } : row;
+      })
+    };
+  };
+  return {
+    ...data,
+    week: updateRanking(data.week),
+    month: updateRanking(data.month)
+  };
 }
 
 export function Home({ onNavigate }) {
@@ -28,13 +154,17 @@ export function Home({ onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [pendingNameUpdate, setPendingNameUpdate] = useState(null);
+  const [pendingEmployeeMerge, setPendingEmployeeMerge] = useState(null);
   const [error, setError] = useState("");
+  const originalRankingDataRef = useRef(null);
   const rankingInProgress = HIDE_UNFINISHED_RANKINGS && UNFINISHED_RANKING_WAREHOUSES.has(warehouse);
 
   useEffect(() => {
     const controller = new AbortController();
     async function loadRanking() {
       setRankingData(null);
+      originalRankingDataRef.current = null;
       setError("");
       if (rankingInProgress) {
         setLoading(false);
@@ -42,15 +172,31 @@ export function Home({ onNavigate }) {
       }
       setLoading(true);
       try {
-        const response = await fetch(`${API}/api/weekly/picking-rankings`, {
+        const weekResponse = await fetch(`${API}/api/weekly/picking-rankings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ warehouse }),
+          body: JSON.stringify({ warehouse, period: "week" }),
           signal: controller.signal
         });
-        const json = await readApiJson(response);
-        if (!response.ok) throw json;
-        setRankingData(json);
+        const weekJson = await readApiJson(weekResponse);
+        if (!weekResponse.ok) throw weekJson;
+        setRankingData(weekJson);
+        originalRankingDataRef.current = cloneRankingData(weekJson);
+        if (!controller.signal.aborted) setLoading(false);
+
+        const monthResponse = await fetch(`${API}/api/weekly/picking-rankings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ warehouse, period: "month" }),
+          signal: controller.signal
+        });
+        const monthJson = await readApiJson(monthResponse);
+        if (!monthResponse.ok) throw monthJson;
+        setRankingData((current) => {
+          const next = { ...(current || {}), ...monthJson };
+          originalRankingDataRef.current = cloneRankingData(next);
+          return next;
+        });
       } catch (e) {
         if (e.name === "AbortError") return;
         const message = String(e?.message || "");
@@ -65,31 +211,15 @@ export function Home({ onNavigate }) {
     return () => controller.abort();
   }, [warehouse, rankingInProgress]);
 
-  async function refreshRanking() {
+  function refreshRanking() {
     setError("");
     if (rankingInProgress) {
       setRankingData(null);
       setLoading(false);
       return;
     }
-    setLoading(true);
-    try {
-      const response = await fetch(`${API}/api/weekly/picking-rankings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ warehouse })
-      });
-      const json = await readApiJson(response);
-      if (!response.ok) throw json;
-      setRankingData(json);
-    } catch (e) {
-      const message = String(e?.message || "");
-      setError(message === "Failed to fetch"
-        ? "API is not reachable. Check that the backend is running on http://127.0.0.1:3001."
-        : formatUploadError(e));
-    } finally {
-      setLoading(false);
-    }
+    setRankingData(cloneRankingData(originalRankingDataRef.current));
+    setLoading(false);
   }
 
   async function confirmDeletePerson() {
@@ -107,12 +237,68 @@ export function Home({ onNavigate }) {
       });
       const json = await readApiJson(response);
       if (!response.ok) throw json;
+      setRankingData((current) => removePersonFromRankingData(current, pendingDelete));
+      originalRankingDataRef.current = removePersonFromRankingData(originalRankingDataRef.current, pendingDelete);
       setPendingDelete(null);
-      await refreshRanking();
     } catch (e) {
       setError(formatUploadError(e));
     } finally {
       setDeleting(false);
+    }
+  }
+
+  function mergeRankingEmployee({ row, targetEmployeeNo, period, ranking }) {
+    const cleanTarget = String(targetEmployeeNo || "").trim();
+    if (!cleanTarget || cleanTarget === row.employeeNo) return false;
+    setError("");
+    if (mergeEmployeeInRanking(ranking, row, cleanTarget) === ranking) return false;
+    setPendingEmployeeMerge({ row, targetEmployeeNo: cleanTarget, period, ranking });
+    return true;
+  }
+
+  function confirmEmployeeMerge() {
+    if (!pendingEmployeeMerge) return;
+    const { row, targetEmployeeNo, period, ranking } = pendingEmployeeMerge;
+    const mergedRanking = mergeEmployeeInRanking(ranking, row, targetEmployeeNo);
+    if (mergedRanking === ranking) {
+      setPendingEmployeeMerge(null);
+      return;
+    }
+    setRankingData((current) => ({
+      ...(current || {}),
+      [period]: mergedRanking
+    }));
+    setPendingEmployeeMerge(null);
+  }
+
+  function updateRankingEmployeeName({ row, name }) {
+    const cleanName = String(name || "").trim();
+    if (!cleanName || cleanName === row.name) return false;
+    setPendingNameUpdate({ row, name: cleanName });
+    return true;
+  }
+
+  async function confirmNameUpdate() {
+    if (!pendingNameUpdate) return;
+    const { row, name } = pendingNameUpdate;
+    setError("");
+    try {
+      const response = await fetch(`${API}/api/weekly/picking-rankings/update-name`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeNo: row.employeeNo,
+          oldName: row.name,
+          name
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      setRankingData((current) => updatePersonNameInRankingData(current, row, name));
+      originalRankingDataRef.current = updatePersonNameInRankingData(originalRankingDataRef.current, row, name);
+      setPendingNameUpdate(null);
+    } catch (e) {
+      setError(formatUploadError(e));
     }
   }
 
@@ -130,7 +316,7 @@ export function Home({ onNavigate }) {
               <span>Picking Efficiency Ranking</span>
             </div>
             <p className="hint-line">Goods type factor: T25 / T50 = 1 small unit, all other types = 2.5 small units. Floor factor: L1 = 1, L2 = 1.1, L3 = 1.2, L4 = 1.3.</p>
-            <p className="hint-line">Weighted Units = Non-Burst Units * Goods type factor* Floor factor</p>
+            <p className="hint-line">Picking Weighted Units = Non-Burst Units * Goods type factor* Floor factor</p>
             <div className="ranking-period-toggle" role="group" aria-label="Ranking period">
               <button
                 type="button"
@@ -171,7 +357,10 @@ export function Home({ onNavigate }) {
           <RankingTable
             title={rankingPeriod === "week" ? "Weekly Ranking" : "Monthly Ranking"}
             ranking={rankingPeriod === "week" ? rankingData?.week : rankingData?.month}
+            period={rankingPeriod === "week" ? "week" : "month"}
             onDelete={setPendingDelete}
+            onMergeEmployee={mergeRankingEmployee}
+            onUpdateName={updateRankingEmployeeName}
             disabled={deleting || loading}
           />
         )}
@@ -206,6 +395,26 @@ export function Home({ onNavigate }) {
           onConfirm={confirmDeletePerson}
         />
       )}
+      {pendingNameUpdate && (
+        <ConfirmDialog
+          title="Update name?"
+          message={`Change ${pendingNameUpdate.row.employeeNo || pendingNameUpdate.row.name} from "${pendingNameUpdate.row.name || ""}" to "${pendingNameUpdate.name}"?`}
+          confirmLabel="Confirm"
+          confirmClassName="primary-btn"
+          onCancel={() => setPendingNameUpdate(null)}
+          onConfirm={confirmNameUpdate}
+        />
+      )}
+      {pendingEmployeeMerge && (
+        <ConfirmDialog
+          title="Merge employee ID?"
+          message={`Merge ${pendingEmployeeMerge.row.employeeNo || pendingEmployeeMerge.row.name} into ${pendingEmployeeMerge.targetEmployeeNo}?`}
+          confirmLabel="Confirm"
+          confirmClassName="primary-btn"
+          onCancel={() => setPendingEmployeeMerge(null)}
+          onConfirm={confirmEmployeeMerge}
+        />
+      )}
     </section>
   );
 }
@@ -225,7 +434,7 @@ function RankingComingSoon({ title }) {
   );
 }
 
-function RankingTable({ title, ranking, onDelete, disabled }) {
+function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpdateName, disabled }) {
   const rows = ranking?.rows || [];
   const first = rows[0];
   const last = rows.length > 1 ? rows[rows.length - 1] : null;
@@ -251,8 +460,10 @@ function RankingTable({ title, ranking, onDelete, disabled }) {
                 <th>Rank</th>
                 <th>Employee ID</th>
                 <th>Name</th>
-                <th>Weighted Units</th>
-                <th>Hours</th>
+                <th>Picking Weighted Units</th>
+                <th>Packing Units</th>
+                <th>Picking Hours</th>
+                <th>Packing Hours</th>
                 <th>Efficiency</th>
                 <th>L1%</th>
                 <th>L2%</th>
@@ -277,10 +488,26 @@ function RankingTable({ title, ranking, onDelete, disabled }) {
                     </button>
                   </td>
                   <td>{row.rank}</td>
-                  <td>{row.employeeNo}</td>
-                  <td>{row.name}</td>
-                  <td>{formatCell(row.weightedUnits)}</td>
-                  <td>{formatCell(row.hours ?? row.effectiveHours)}</td>
+                  <td>
+                    <EmployeeIdInput
+                      row={row}
+                      ranking={ranking}
+                      period={period}
+                      disabled={disabled}
+                      onMergeEmployee={onMergeEmployee}
+                    />
+                  </td>
+                  <td>
+                    <NameInput
+                      row={row}
+                      disabled={disabled}
+                      onUpdateName={onUpdateName}
+                    />
+                  </td>
+                  <td>{formatCell(row.pickingWeightedUnits ?? row.weightedUnits)}</td>
+                  <td>{formatCell(row.packingUnits || 0)}</td>
+                  <td>{formatCell(row.pickingHours ?? row.hours ?? row.effectiveHours)}</td>
+                  <td>{formatCell(row.packingHours || 0)}</td>
                   <td>{formatCell(row.efficiency)}</td>
                   <td>{formatPercent(row.l1Percent)}</td>
                   <td>{formatPercent(row.l2Percent)}</td>
@@ -308,12 +535,84 @@ function formatCargoMix(row) {
   return `Large ${formatPercent(row.largePercent)} / Small ${formatPercent(row.smallPercent)}`;
 }
 
+function EmployeeIdInput({ row, ranking, period, disabled, onMergeEmployee }) {
+  const [value, setValue] = useState(row.employeeNo || "");
+
+  useEffect(() => {
+    setValue(row.employeeNo || "");
+  }, [row.employeeNo]);
+
+  function commit() {
+    const cleanValue = value.trim();
+    if (!cleanValue || cleanValue === row.employeeNo) {
+      setValue(row.employeeNo || "");
+      return;
+    }
+    const pending = onMergeEmployee?.({ row, targetEmployeeNo: cleanValue, period, ranking });
+    if (pending) setValue(row.employeeNo || "");
+  }
+
+  return (
+    <input
+      className="ranking-employee-input"
+      value={value}
+      disabled={disabled}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setValue(row.employeeNo || "");
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={`Employee ID for ${row.name || row.employeeNo}`}
+    />
+  );
+}
+
+function NameInput({ row, disabled, onUpdateName }) {
+  const [value, setValue] = useState(row.name || "");
+
+  useEffect(() => {
+    setValue(row.name || "");
+  }, [row.name]);
+
+  function commit() {
+    const cleanValue = value.trim();
+    if (!cleanValue || cleanValue === row.name) {
+      setValue(row.name || "");
+      return;
+    }
+    const pending = onUpdateName?.({ row, name: cleanValue });
+    if (pending) setValue(row.name || "");
+  }
+
+  return (
+    <input
+      className="ranking-name-input"
+      value={value}
+      disabled={disabled}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setValue(row.name || "");
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={`Name for ${row.employeeNo || row.name}`}
+    />
+  );
+}
+
 function RankingCallout({ icon, label, row, muted = false }) {
   return (
     <div className={muted ? "ranking-callout muted" : "ranking-callout"}>
       <span>{icon}{label}</span>
       <strong>{row.name || row.employeeNo}</strong>
-      <small>{formatCell(row.efficiency)} weighted units/hour</small>
+      <small>{formatCell(row.efficiency)} units/hour</small>
     </div>
   );
 }
