@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, CalendarDays, FileSpreadsheet, Maximize2, Medal, MessageSquarePlus, Minimize2, Package, Plus, Trophy, Users, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, ChevronDown, ChevronRight, FileSpreadsheet, Maximize2, Medal, MessageSquarePlus, Minimize2, Package, Plus, Trophy, Users, X } from "lucide-react";
 import { API } from "../constants";
 import { AlertDialog, ConfirmDialog, GlassSelect, ProgressBar } from "../components/controls";
 import { formatCell, formatUploadError } from "../utils/formatters";
@@ -669,6 +669,7 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
   const rows = ranking?.rows || [];
   const first = rows[0];
   const last = rows.length > 1 ? rows[rows.length - 1] : null;
+  const [expandedColumns, setExpandedColumns] = useState({ units: false, hours: false });
 
   return (
     <div className="ranking-card">
@@ -699,10 +700,32 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
                 <th>Rank</th>
                 <th>Employee ID</th>
                 <th>Name</th>
-                <th>Picking Weighted Units</th>
-                <th>Packing Units</th>
-                <th>Picking Hours</th>
-                <th>Packing Hours</th>
+                <th>
+                  <ColumnGroupToggle
+                    label="Total Weighted Units"
+                    expanded={expandedColumns.units}
+                    onToggle={() => setExpandedColumns((current) => ({ ...current, units: !current.units }))}
+                  />
+                </th>
+                {expandedColumns.units && (
+                  <>
+                    <th className="ranking-child-col">Picking</th>
+                    <th className="ranking-child-col">Packing</th>
+                  </>
+                )}
+                <th>
+                  <ColumnGroupToggle
+                    label="Total Hours"
+                    expanded={expandedColumns.hours}
+                    onToggle={() => setExpandedColumns((current) => ({ ...current, hours: !current.hours }))}
+                  />
+                </th>
+                {expandedColumns.hours && (
+                  <>
+                    <th className="ranking-child-col">Picking</th>
+                    <th className="ranking-child-col">Packing</th>
+                  </>
+                )}
                 <th>Efficiency</th>
                 <th>L1%</th>
                 <th>L2%</th>
@@ -743,26 +766,36 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
                       onUpdateName={onUpdateName}
                     />
                   </td>
-                  <td>{formatCell(row.pickingWeightedUnits ?? row.weightedUnits)}</td>
-                  <td>
-                    <PackingUnitsInput
-                      row={row}
-                      ranking={ranking}
-                      period={period}
-                      disabled={disabled}
-                      onUpdatePackingUnits={onUpdatePackingUnits}
-                    />
-                  </td>
-                  <td>{formatCell(row.pickingHours ?? row.hours ?? row.effectiveHours)}</td>
-                  <td>
-                    <PackingHoursInput
-                      row={row}
-                      ranking={ranking}
-                      period={period}
-                      disabled={disabled}
-                      onUpdatePackingHours={onUpdatePackingHours}
-                    />
-                  </td>
+                  <td>{formatCell(toNumber(row.pickingWeightedUnits ?? row.weightedUnits) + toNumber(row.packingUnits))}</td>
+                  {expandedColumns.units && (
+                    <>
+                      <td className="ranking-child-col">{formatCell(row.pickingWeightedUnits ?? row.weightedUnits)}</td>
+                      <td className="ranking-child-col">
+                        <PackingUnitsInput
+                          row={row}
+                          ranking={ranking}
+                          period={period}
+                          disabled={disabled}
+                          onUpdatePackingUnits={onUpdatePackingUnits}
+                        />
+                      </td>
+                    </>
+                  )}
+                  <td>{formatCell(toNumber(row.pickingHours ?? row.hours ?? row.effectiveHours) + toNumber(row.packingHours))}</td>
+                  {expandedColumns.hours && (
+                    <>
+                      <td className="ranking-child-col">{formatCell(row.pickingHours ?? row.hours ?? row.effectiveHours)}</td>
+                      <td className="ranking-child-col">
+                        <PackingHoursInput
+                          row={row}
+                          ranking={ranking}
+                          period={period}
+                          disabled={disabled}
+                          onUpdatePackingHours={onUpdatePackingHours}
+                        />
+                      </td>
+                    </>
+                  )}
                   <td>{formatCell(row.efficiency)}</td>
                   <td>{formatPercent(row.l1Percent)}</td>
                   <td>{formatPercent(row.l2Percent)}</td>
@@ -778,6 +811,16 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
         <div className="empty">No cached ranking for this period yet.</div>
       )}
     </div>
+  );
+}
+
+function ColumnGroupToggle({ label, expanded, onToggle }) {
+  const Icon = expanded ? ChevronDown : ChevronRight;
+  return (
+    <button type="button" className="ranking-column-toggle" onClick={onToggle} aria-expanded={expanded}>
+      <Icon size={13} />
+      <span>{label}</span>
+    </button>
   );
 }
 
