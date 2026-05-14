@@ -33,6 +33,7 @@ router.post("/analyze", (req, res) => {
 router.post("/query-unit", async (req, res) => {
   try {
     const { from, to, warehouse, warehouseNo } = req.body || {};
+    console.log(`[weekly-unit] request ${from || ""} -> ${to || ""}, warehouse=${warehouse || ""}`);
     res.json(await queryUnitData({ from, to, warehouse, warehouseNo }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
@@ -42,6 +43,7 @@ router.post("/query-unit", async (req, res) => {
 router.post("/query-picking", async (req, res) => {
   try {
     const { from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick } = req.body || {};
+    console.log(`[picking-efficiency] request ${from || ""} -> ${to || ""}, warehouse=${warehouse || ""}, includeBigWavePick=${Boolean(includeBigWavePick)}`);
     res.json(await queryPickingData({ from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });

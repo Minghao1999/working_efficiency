@@ -14,6 +14,12 @@ app.use(cors({
   origin: allowedOrigin || true
 }));
 app.use(express.json({ limit: "20mb" }));
+app.use((req, _res, next) => {
+  if (req.path.startsWith("/api/")) {
+    console.log(`[api] ${req.method} ${req.path}`);
+  }
+  next();
+});
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.use("/api/efficiency", efficiencyRouter);

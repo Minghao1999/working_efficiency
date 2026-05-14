@@ -66,6 +66,34 @@ function dateKeysBetween(startDate, endDate) {
   return dates;
 }
 
+function dateRangesFromKeys(dates) {
+  const sortedDates = [...new Set(dates || [])].sort();
+  const ranges = [];
+  let rangeStart = "";
+  let previous = "";
+
+  for (const date of sortedDates) {
+    if (!rangeStart) {
+      rangeStart = date;
+      previous = date;
+      continue;
+    }
+
+    const expectedNext = dateKeysBetween(previous, date)[1];
+    if (expectedNext === date) {
+      previous = date;
+      continue;
+    }
+
+    ranges.push({ from: rangeStart, to: previous });
+    rangeStart = date;
+    previous = date;
+  }
+
+  if (rangeStart) ranges.push({ from: rangeStart, to: previous });
+  return ranges;
+}
+
 function todayKey() {
   return dayKey(new Date());
 }
@@ -74,6 +102,16 @@ function cacheStatusForDate(date) {
   if (date < todayKey()) return "final";
   if (date === todayKey()) return "provisional";
   return "skip";
+}
+
+function logDailySources(label, { requestedDates, cachedByDate, datesToFetch, cacheStatus }) {
+  const apiDates = new Set(datesToFetch || []);
+  const cacheEnabled = Boolean(cacheStatus?.enabled);
+  console.log(`[${label}] data source by date:`);
+  for (const date of requestedDates || []) {
+    const source = cacheEnabled && cachedByDate?.has(date) && !apiDates.has(date) ? "database" : "api";
+    console.log(`[${label}] ${date} -> ${source}`);
+  }
 }
 
 function buildSoapEnvelope(arg0, arg1) {
@@ -436,6 +474,23 @@ export function weeklyDailyFromUnitRows(rows) {
     .sort((a, b) => String(a.业务日期).localeCompare(String(b.业务日期)));
 }
 
+async function fetchUnitRowsForDates({ dates, warehouseNo }) {
+  const rows = [];
+  const pageSize = 1000;
+  const maxPages = 50;
+
+  for (const range of dateRangesFromKeys(dates)) {
+    for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
+      const result = await postWms(buildUnitQueryBody({ ...range, warehouseNo, currentPage, pageSize }), warehouseNo);
+      const pageRows = getRows(result);
+      rows.push(...pageRows);
+      if (pageRows.length < pageSize) break;
+    }
+  }
+
+  return rows;
+}
+
 export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO } = {}) {
   const warehouseKey = String(warehouse || "5").trim();
   const cleanWarehouseNo = resolveWarehouseNo(warehouse, warehouseNo);
@@ -452,6 +507,12 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
 
   if (cacheStatus.enabled && !cached.missingDates.length) {
     const daily = dailyFromCachedDocs(requestedDates, cached.byDate);
+    logDailySources("weekly-unit", {
+      requestedDates,
+      cachedByDate: cached.byDate,
+      datesToFetch: [],
+      cacheStatus
+    });
     return {
       kpi: {
         totalOrders: sum(daily, (row) => row.单量),
@@ -466,23 +527,23 @@ export async function queryUnitData({ from, to, warehouse, warehouseNo = DEFAULT
     };
   }
 
-  const pageSize = 1000;
-  const rows = [];
-  const maxPages = 50;
-
-  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
-    const result = await postWms(buildUnitQueryBody({ from, to, warehouseNo: cleanWarehouseNo, currentPage, pageSize }), cleanWarehouseNo);
-    const pageRows = getRows(result);
-    rows.push(...pageRows);
-    if (pageRows.length < pageSize) break;
-  }
-
-  const fetchedDaily = filterDailyByRequestedDates(weeklyDailyFromUnitRows(rows), requestedDates);
-  let daily = fetchedDaily;
+  const datesToFetch = cacheStatus.enabled ? cached.missingDates : requestedDates;
+  logDailySources("weekly-unit", {
+    requestedDates,
+    cachedByDate: cached.byDate,
+    datesToFetch,
+    cacheStatus
+  });
+  const rows = await fetchUnitRowsForDates({ dates: datesToFetch, warehouseNo: cleanWarehouseNo });
+  const fetchedDaily = filterDailyByRequestedDates(weeklyDailyFromUnitRows(rows), datesToFetch);
+  let daily = cacheStatus.enabled
+    ? [...dailyFromCachedDocs(requestedDates, cached.byDate), ...fetchedDaily]
+      .sort((a, b) => String(a["\u4e1a\u52a1\u65e5\u671f"]).localeCompare(String(b["\u4e1a\u52a1\u65e5\u671f"])))
+    : fetchedDaily;
 
   if (cacheStatus.enabled) {
     try {
-      await writeCachedDaily({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: requestedDates, daily: fetchedDaily });
+      await writeCachedDaily({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: datesToFetch, daily: fetchedDaily });
     } catch (error) {
       cacheStatus = { enabled: false, error: error.message };
     }
@@ -535,6 +596,14 @@ async function fetchPickingRows({ from, to, warehouseNo, bigWave = false }) {
   return rows;
 }
 
+async function fetchPickingRowsForDates({ dates, warehouseNo, bigWave = false }) {
+  const rows = [];
+  for (const range of dateRangesFromKeys(dates)) {
+    rows.push(...await fetchPickingRows({ ...range, warehouseNo, bigWave }));
+  }
+  return rows;
+}
+
 export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFAULT_WAREHOUSE_NO, targetUpph = "", includeBigWavePick = false } = {}) {
   const warehouseKey = String(warehouse || "5").trim();
   const cleanWarehouseNo = resolveWarehouseNo(warehouse, warehouseNo);
@@ -554,6 +623,12 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
 
   if (useCache && cacheStatus.enabled && !cached.missingDates.length) {
     const analysis = analyzePickRows(cached.rows, null, Number(targetUpph) || "", []);
+    logDailySources("picking-efficiency", {
+      requestedDates,
+      cachedByDate: cached.byDate,
+      datesToFetch: [],
+      cacheStatus
+    });
     return {
       ...analysis,
       rawCount: cached.rows.length,
@@ -562,19 +637,29 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     };
   }
 
-  const regularRows = (await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo }))
+  const datesToFetch = useCache && cacheStatus.enabled ? cached.missingDates : requestedDates;
+  logDailySources("picking-efficiency", {
+    requestedDates,
+    cachedByDate: cached.byDate,
+    datesToFetch,
+    cacheStatus
+  });
+  const regularRows = (await fetchPickingRowsForDates({ dates: datesToFetch, warehouseNo: cleanWarehouseNo }))
     .map((row) => ({ ...row, _source_key: "wms-regular" }));
   const bigWaveRows = includeBigWavePick
-    ? (await fetchPickingRows({ from, to, warehouseNo: cleanWarehouseNo, bigWave: true }))
+    ? (await fetchPickingRowsForDates({ dates: datesToFetch, warehouseNo: cleanWarehouseNo, bigWave: true }))
       .map((row) => ({ ...row, _source_key: "wms-big-wave" }))
     : [];
   const rows = [...regularRows, ...bigWaveRows];
 
-  const normalizedRows = filterPickingRowsByRequestedDates(normalizePickingRows(rows), requestedDates);
+  const fetchedRows = filterPickingRowsByRequestedDates(normalizePickingRows(rows), datesToFetch);
+  const normalizedRows = useCache && cacheStatus.enabled
+    ? [...normalizePickingRows(cached.rows || []), ...fetchedRows]
+    : fetchedRows;
 
   if (useCache && cacheStatus.enabled) {
     try {
-      await writeCachedPickingRows({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: requestedDates, rows: normalizedRows });
+      await writeCachedPickingRows({ warehouseKey, warehouseNo: cleanWarehouseNo, dates: datesToFetch, rows: fetchedRows });
     } catch (error) {
       cacheStatus = { enabled: false, error: error.message };
     }
