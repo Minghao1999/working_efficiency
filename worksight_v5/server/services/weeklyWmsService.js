@@ -1361,9 +1361,9 @@ export async function mergePickingRankingEmployee({
   const targetIndex = rows.findIndex((row) => employeeKey(row.employeeNo) === targetKey);
 
   if (sourceIndex < 0) return { changed: false, reason: "source-not-found", ranking: await filterRankingDoc(cached) };
-  if (targetIndex < 0 || sourceIndex === targetIndex) {
-    return { changed: false, reason: targetIndex < 0 ? "target-not-found" : "same-row", ranking: await filterRankingDoc(cached) };
-  }
+  if (sourceIndex === targetIndex) return { changed: false, reason: "same-row", ranking: await filterRankingDoc(cached) };
+
+  if (targetIndex < 0) return { changed: false, reason: "target-not-found", ranking: await filterRankingDoc(cached) };
 
   const targetRow = rows[targetIndex];
   const sourceRow = rows[sourceIndex];
@@ -1421,6 +1421,122 @@ export async function updatePickingRankingEmployeeName({ employeeNo, oldName, na
   }
 
   return { ok: true, updatedDocs, updatedRows, name: cleanName };
+}
+
+function rankingRowMatches(row, { employeeNo, name }) {
+  const cleanEmployeeNo = employeeKey(employeeNo);
+  const cleanName = identityText(name).toLowerCase();
+  return (
+    (cleanEmployeeNo && employeeKey(row.employeeNo) === cleanEmployeeNo)
+    || (cleanName && identityText(row.name).toLowerCase() === cleanName)
+  );
+}
+
+async function readRankingCacheDoc({ warehouse, period, startDate, endDate }) {
+  const warehouseKey = String(warehouse || "5").trim();
+  const cleanPeriod = identityText(period);
+  if (!warehouseKey || !cleanPeriod || !startDate || !endDate) {
+    const error = new Error("Missing ranking fields.");
+    error.status = 400;
+    throw error;
+  }
+  const collection = await pickingRankingCacheCollection();
+  const filter = { warehouseKey, period: cleanPeriod, startDate, endDate };
+  const doc = await collection.findOne(filter, { projection: { _id: 0 } });
+  if (!doc) {
+    const error = new Error("Ranking cache not found.");
+    error.status = 404;
+    throw error;
+  }
+  return { collection, filter, doc };
+}
+
+export async function updatePickingRankingRow({ warehouse, period, startDate, endDate, employeeNo, name, updates = {} } = {}) {
+  const { collection, filter, doc } = await readRankingCacheDoc({ warehouse, period, startDate, endDate });
+  const rowIndex = (doc.rows || []).findIndex((row) => rankingRowMatches(row, { employeeNo, name }));
+  if (rowIndex < 0) {
+    const error = new Error("Ranking row not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  const numericFields = ["pickingWeightedUnits", "weightedUnits", "pickingHours", "hours", "effectiveHours", "packingUnits", "packingHours", "l1Percent", "l2Percent", "l3Percent", "l4Percent", "smallPercent", "largePercent"];
+  const cleanUpdates = {};
+  for (const field of numericFields) {
+    if (Object.prototype.hasOwnProperty.call(updates, field)) cleanUpdates[field] = num(updates[field], 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "name")) cleanUpdates.name = identityText(updates.name);
+  if (Object.prototype.hasOwnProperty.call(updates, "employeeNo")) cleanUpdates.employeeNo = identityText(updates.employeeNo);
+
+  const rows = [...(doc.rows || [])];
+  rows[rowIndex] = recalculateRankingRow({ ...rows[rowIndex], ...cleanUpdates });
+  const rankedRows = rerankRows(rows);
+  const nextDoc = { ...doc, rows: rankedRows, updatedAt: new Date() };
+  await collection.updateOne(filter, { $set: { rows: rankedRows, updatedAt: nextDoc.updatedAt } });
+  return { ok: true, ranking: { ...(await filterRankingDoc(nextDoc)), source: "database" } };
+}
+
+export async function addPickingRankingRow({ warehouse, period, startDate, endDate, row = {} } = {}) {
+  const { collection, filter, doc } = await readRankingCacheDoc({ warehouse, period, startDate, endDate });
+  const name = identityText(row.name);
+  const packingUnits = num(row.packingUnits, NaN);
+  const packingHours = num(row.packingHours, NaN);
+  if (!name || !Number.isFinite(packingUnits) || !Number.isFinite(packingHours)) {
+    const error = new Error("Name, packing units, and packing hours are required.");
+    error.status = 400;
+    throw error;
+  }
+
+  const nextRow = recalculateRankingRow({
+    rank: 0,
+    employeeNo: identityText(row.employeeNo),
+    name,
+    pickingWeightedUnits: num(row.pickingWeightedUnits, 0),
+    weightedUnits: num(row.pickingWeightedUnits, 0),
+    pickingHours: num(row.pickingHours, 0),
+    hours: num(row.pickingHours, 0),
+    effectiveHours: num(row.pickingHours, 0),
+    packingUnits,
+    packingHours,
+    l1Percent: num(row.l1Percent, 0),
+    l2Percent: num(row.l2Percent, 0),
+    l3Percent: num(row.l3Percent, 0),
+    l4Percent: num(row.l4Percent, 0),
+    smallPercent: num(row.smallPercent, 0),
+    largePercent: num(row.largePercent, 0),
+    mainCargo: identityText(row.mainCargo) || "Mixed"
+  });
+  const rankedRows = rerankRows([...(doc.rows || []), nextRow]);
+  const nextDoc = { ...doc, rows: rankedRows, updatedAt: new Date() };
+  await collection.updateOne(filter, { $set: { rows: rankedRows, updatedAt: nextDoc.updatedAt } });
+  return { ok: true, ranking: { ...(await filterRankingDoc(nextDoc)), source: "database" } };
+}
+
+export async function restorePickingRankingSnapshot({ warehouse, rankings = {}, restoreExcluded = [] } = {}) {
+  const warehouseKey = String(warehouse || "5").trim();
+  const collection = await pickingRankingCacheCollection();
+  const now = new Date();
+  const restored = {};
+
+  for (const period of ["week", "month"]) {
+    const ranking = rankings?.[period];
+    if (!ranking?.startDate || !ranking?.endDate || !Array.isArray(ranking.rows)) continue;
+    const filter = { warehouseKey, period, startDate: ranking.startDate, endDate: ranking.endDate };
+    const rows = rerankRows(ranking.rows.map(recalculateRankingRow));
+    await collection.updateOne(filter, { $set: { rows, updatedAt: now } });
+    restored[period] = { ...ranking, rows, updatedAt: now, source: "database" };
+  }
+
+  if (restoreExcluded.length) {
+    const exclusions = await pickingRankingExclusionCollection();
+    const exclusionFilters = restoreExcluded.flatMap((person) => [
+        identityText(person.employeeNo) ? { employeeNo: identityText(person.employeeNo) } : null,
+        identityText(person.name) ? { name: identityText(person.name) } : null
+      ]).filter(Boolean);
+    if (exclusionFilters.length) await exclusions.deleteMany({ $or: exclusionFilters });
+  }
+
+  return { ok: true, rankings: restored };
 }
 
 async function claimRankingJob(jobKey) {

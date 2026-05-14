@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { analyzeWeekly } from "../services/weeklyService.js";
-import { excludePickingRankingPerson, mergePickingRankingEmployee, queryPickingData, queryPickingRankings, queryUnitData, updatePickingRankingEmployeeName } from "../services/weeklyWmsService.js";
+import { addPickingRankingRow, excludePickingRankingPerson, mergePickingRankingEmployee, queryPickingData, queryPickingRankings, queryUnitData, restorePickingRankingSnapshot, updatePickingRankingEmployeeName, updatePickingRankingRow } from "../services/weeklyWmsService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -79,6 +79,30 @@ router.post("/picking-rankings/merge-employee", async (req, res) => {
 router.post("/picking-rankings/update-name", async (req, res) => {
   try {
     res.json(await updatePickingRankingEmployeeName(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/update-row", async (req, res) => {
+  try {
+    res.json(await updatePickingRankingRow(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/add-row", async (req, res) => {
+  try {
+    res.json(await addPickingRankingRow(req.body || {}));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/picking-rankings/restore", async (req, res) => {
+  try {
+    res.json(await restorePickingRankingSnapshot(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }

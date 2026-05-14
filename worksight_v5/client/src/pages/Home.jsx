@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CalendarDays, FileSpreadsheet, Medal, MessageSquarePlus, Package, Trophy, Users, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, CalendarDays, FileSpreadsheet, Maximize2, Medal, MessageSquarePlus, Minimize2, Package, Plus, Trophy, Users, X } from "lucide-react";
 import { API } from "../constants";
-import { ConfirmDialog, GlassSelect, ProgressBar } from "../components/controls";
+import { AlertDialog, ConfirmDialog, GlassSelect, ProgressBar } from "../components/controls";
 import { formatCell, formatUploadError } from "../utils/formatters";
 
 const WAREHOUSE_OPTIONS = [
@@ -147,6 +148,13 @@ function updatePersonNameInRankingData(data, person, name) {
   };
 }
 
+function updatePeriodRankingData(current, period, ranking) {
+  return {
+    ...(current || {}),
+    [period]: ranking
+  };
+}
+
 export function Home({ onNavigate }) {
   const [warehouse, setWarehouse] = useState("5");
   const [rankingPeriod, setRankingPeriod] = useState("week");
@@ -156,15 +164,33 @@ export function Home({ onNavigate }) {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [pendingNameUpdate, setPendingNameUpdate] = useState(null);
   const [pendingEmployeeMerge, setPendingEmployeeMerge] = useState(null);
+  const [pendingPackingUnitsUpdate, setPendingPackingUnitsUpdate] = useState(null);
+  const [pendingPackingHoursUpdate, setPendingPackingHoursUpdate] = useState(null);
+  const [pendingRefresh, setPendingRefresh] = useState(false);
+  const [employeeMergeAlert, setEmployeeMergeAlert] = useState(null);
+  const [addingRanking, setAddingRanking] = useState(false);
+  const [fullscreenRanking, setFullscreenRanking] = useState(false);
   const [error, setError] = useState("");
+  const rankingPanelRef = useRef(null);
   const originalRankingDataRef = useRef(null);
+  const deletedPeopleRef = useRef([]);
   const rankingInProgress = HIDE_UNFINISHED_RANKINGS && UNFINISHED_RANKING_WAREHOUSES.has(warehouse);
+  const modalContainer = fullscreenRanking && rankingPanelRef.current ? rankingPanelRef.current : document.body;
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      setFullscreenRanking(document.fullscreenElement === rankingPanelRef.current);
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     async function loadRanking() {
       setRankingData(null);
       originalRankingDataRef.current = null;
+      deletedPeopleRef.current = [];
       setError("");
       if (rankingInProgress) {
         setLoading(false);
@@ -193,9 +219,8 @@ export function Home({ onNavigate }) {
         const monthJson = await readApiJson(monthResponse);
         if (!monthResponse.ok) throw monthJson;
         setRankingData((current) => {
-          const next = { ...(current || {}), ...monthJson };
-          originalRankingDataRef.current = cloneRankingData(next);
-          return next;
+          originalRankingDataRef.current = cloneRankingData({ ...(originalRankingDataRef.current || {}), ...monthJson });
+          return { ...(current || {}), ...monthJson };
         });
       } catch (e) {
         if (e.name === "AbortError") return;
@@ -211,15 +236,53 @@ export function Home({ onNavigate }) {
     return () => controller.abort();
   }, [warehouse, rankingInProgress]);
 
-  function refreshRanking() {
+  async function restoreRankingSnapshot() {
     setError("");
     if (rankingInProgress) {
       setRankingData(null);
       setLoading(false);
+      setPendingRefresh(false);
       return;
     }
-    setRankingData(cloneRankingData(originalRankingDataRef.current));
-    setLoading(false);
+    try {
+      const snapshot = cloneRankingData(originalRankingDataRef.current);
+      const response = await fetch(`${API}/api/weekly/picking-rankings/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warehouse,
+          rankings: snapshot || {},
+          restoreExcluded: deletedPeopleRef.current
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      deletedPeopleRef.current = [];
+      setRankingData(snapshot);
+      setPendingRefresh(false);
+    } catch (e) {
+      setError(formatUploadError(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function requestRefreshRanking() {
+    setPendingRefresh(true);
+  }
+
+  async function toggleRankingFullscreen() {
+    const target = rankingPanelRef.current;
+    if (!target) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (target.requestFullscreen) {
+        await target.requestFullscreen();
+      }
+    } catch {
+      setFullscreenRanking((current) => !current);
+    }
   }
 
   async function confirmDeletePerson() {
@@ -237,8 +300,8 @@ export function Home({ onNavigate }) {
       });
       const json = await readApiJson(response);
       if (!response.ok) throw json;
+      deletedPeopleRef.current = [...deletedPeopleRef.current, pendingDelete];
       setRankingData((current) => removePersonFromRankingData(current, pendingDelete));
-      originalRankingDataRef.current = removePersonFromRankingData(originalRankingDataRef.current, pendingDelete);
       setPendingDelete(null);
     } catch (e) {
       setError(formatUploadError(e));
@@ -251,24 +314,41 @@ export function Home({ onNavigate }) {
     const cleanTarget = String(targetEmployeeNo || "").trim();
     if (!cleanTarget || cleanTarget === row.employeeNo) return false;
     setError("");
-    if (mergeEmployeeInRanking(ranking, row, cleanTarget) === ranking) return false;
     setPendingEmployeeMerge({ row, targetEmployeeNo: cleanTarget, period, ranking });
     return true;
   }
 
-  function confirmEmployeeMerge() {
+  async function confirmEmployeeMerge() {
     if (!pendingEmployeeMerge) return;
     const { row, targetEmployeeNo, period, ranking } = pendingEmployeeMerge;
-    const mergedRanking = mergeEmployeeInRanking(ranking, row, targetEmployeeNo);
-    if (mergedRanking === ranking) {
+    try {
+      const response = await fetch(`${API}/api/weekly/picking-rankings/merge-employee`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warehouse,
+          period,
+          startDate: ranking?.startDate,
+          endDate: ranking?.endDate,
+          sourceEmployeeNo: row.employeeNo,
+          sourceName: row.name,
+          targetEmployeeNo
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      if (!json.changed || !json.ranking) {
+        if (json.reason === "target-not-found") {
+          setEmployeeMergeAlert(`Employee ID ${targetEmployeeNo} does not exist.`);
+        }
+        setPendingEmployeeMerge(null);
+        return;
+      }
+      setRankingData((current) => updatePeriodRankingData(current, period, json.ranking));
       setPendingEmployeeMerge(null);
-      return;
+    } catch (e) {
+      setError(formatUploadError(e));
     }
-    setRankingData((current) => ({
-      ...(current || {}),
-      [period]: mergedRanking
-    }));
-    setPendingEmployeeMerge(null);
   }
 
   function updateRankingEmployeeName({ row, name }) {
@@ -295,8 +375,105 @@ export function Home({ onNavigate }) {
       const json = await readApiJson(response);
       if (!response.ok) throw json;
       setRankingData((current) => updatePersonNameInRankingData(current, row, name));
-      originalRankingDataRef.current = updatePersonNameInRankingData(originalRankingDataRef.current, row, name);
       setPendingNameUpdate(null);
+    } catch (e) {
+      setError(formatUploadError(e));
+    }
+  }
+
+  function updateRankingPackingUnits({ row, packingUnits, period, ranking }) {
+    const cleanUnits = Number(packingUnits);
+    if (!Number.isFinite(cleanUnits) || cleanUnits === toNumber(row.packingUnits)) return false;
+    setError("");
+    setPendingPackingUnitsUpdate({ row, packingUnits: cleanUnits, period, ranking });
+    return true;
+  }
+
+  async function confirmPackingUnitsUpdate() {
+    if (!pendingPackingUnitsUpdate) return;
+    const { row, packingUnits, period, ranking } = pendingPackingUnitsUpdate;
+    setError("");
+    try {
+      const response = await fetch(`${API}/api/weekly/picking-rankings/update-row`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warehouse,
+          period,
+          startDate: ranking?.startDate,
+          endDate: ranking?.endDate,
+          employeeNo: row.employeeNo,
+          name: row.name,
+          updates: { packingUnits }
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      if (!json.ranking) return;
+      setRankingData((current) => updatePeriodRankingData(current, period, json.ranking));
+      setPendingPackingUnitsUpdate(null);
+    } catch (e) {
+      setError(formatUploadError(e));
+    }
+  }
+
+  function updateRankingPackingHours({ row, packingHours, period, ranking }) {
+    const cleanHours = Number(packingHours);
+    if (!Number.isFinite(cleanHours) || cleanHours === toNumber(row.packingHours)) return false;
+    setError("");
+    setPendingPackingHoursUpdate({ row, packingHours: cleanHours, period, ranking });
+    return true;
+  }
+
+  async function confirmPackingHoursUpdate() {
+    if (!pendingPackingHoursUpdate) return;
+    const { row, packingHours, period, ranking } = pendingPackingHoursUpdate;
+    setError("");
+    try {
+      const response = await fetch(`${API}/api/weekly/picking-rankings/update-row`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warehouse,
+          period,
+          startDate: ranking?.startDate,
+          endDate: ranking?.endDate,
+          employeeNo: row.employeeNo,
+          name: row.name,
+          updates: { packingHours }
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      if (!json.ranking) return;
+      setRankingData((current) => updatePeriodRankingData(current, period, json.ranking));
+      setPendingPackingHoursUpdate(null);
+    } catch (e) {
+      setError(formatUploadError(e));
+    }
+  }
+
+  async function addManualRankingRow(row) {
+    const period = rankingPeriod === "week" ? "week" : "month";
+    const ranking = period === "week" ? rankingData?.week : rankingData?.month;
+    setError("");
+    try {
+      const response = await fetch(`${API}/api/weekly/picking-rankings/add-row`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          warehouse,
+          period,
+          startDate: ranking?.startDate,
+          endDate: ranking?.endDate,
+          row
+        })
+      });
+      const json = await readApiJson(response);
+      if (!response.ok) throw json;
+      if (!json.ranking) return;
+      setRankingData((current) => updatePeriodRankingData(current, period, json.ranking));
+      setAddingRanking(false);
     } catch (e) {
       setError(formatUploadError(e));
     }
@@ -308,7 +485,7 @@ export function Home({ onNavigate }) {
         <h1>WorkSight Pro</h1>
         <p>Warehouse operations analytics for productivity, orders, units, and trends</p>
       </header>
-      <section className="panel ranking-panel">
+      <section ref={rankingPanelRef} className={fullscreenRanking ? "panel ranking-panel ranking-panel-fullscreen" : "panel ranking-panel"}>
         <div className="table-head">
           <div>
             <div className="panel-title">
@@ -339,7 +516,7 @@ export function Home({ onNavigate }) {
               <span>Warehouse</span>
               <GlassSelect value={warehouse} options={WAREHOUSE_OPTIONS} onChange={setWarehouse} className="warehouse-query-select" />
             </label>
-            <button type="button" className="ghost-btn" onClick={refreshRanking} disabled={loading || rankingInProgress}>
+            <button type="button" className="ghost-btn" onClick={requestRefreshRanking} disabled={loading || rankingInProgress}>
               {loading ? "Loading..." : "Refresh"}
             </button>
           </div>
@@ -361,9 +538,87 @@ export function Home({ onNavigate }) {
             onDelete={setPendingDelete}
             onMergeEmployee={mergeRankingEmployee}
             onUpdateName={updateRankingEmployeeName}
+            onUpdatePackingUnits={updateRankingPackingUnits}
+            onUpdatePackingHours={updateRankingPackingHours}
+            onAddRow={() => setAddingRanking(true)}
+            fullscreen={fullscreenRanking}
+            onToggleFullscreen={toggleRankingFullscreen}
             disabled={deleting || loading}
           />
         )}
+        <ModalPortal container={modalContainer}>
+        {pendingDelete && (
+          <ConfirmDialog
+            title="Delete from ranking?"
+            message={`Delete ${pendingDelete.name || pendingDelete.employeeNo} from picking rankings? This person will not appear in future weekly or monthly rankings.`}
+            onCancel={() => setPendingDelete(null)}
+            onConfirm={confirmDeletePerson}
+          />
+        )}
+        {pendingNameUpdate && (
+          <ConfirmDialog
+            title="Update name?"
+            message={`Change ${pendingNameUpdate.row.employeeNo || pendingNameUpdate.row.name} from "${pendingNameUpdate.row.name || ""}" to "${pendingNameUpdate.name}"?`}
+            confirmLabel="Confirm"
+            confirmClassName="primary-btn"
+            onCancel={() => setPendingNameUpdate(null)}
+            onConfirm={confirmNameUpdate}
+          />
+        )}
+        {pendingEmployeeMerge && (
+          <ConfirmDialog
+            title="Merge employee ID?"
+            message={`Merge ${pendingEmployeeMerge.row.employeeNo || pendingEmployeeMerge.row.name} into ${pendingEmployeeMerge.targetEmployeeNo}?`}
+            confirmLabel="Confirm"
+            confirmClassName="primary-btn"
+            onCancel={() => setPendingEmployeeMerge(null)}
+            onConfirm={confirmEmployeeMerge}
+          />
+        )}
+        {pendingPackingUnitsUpdate && (
+          <ConfirmDialog
+            title="Update packing units?"
+            message={`Change ${pendingPackingUnitsUpdate.row.name || pendingPackingUnitsUpdate.row.employeeNo} packing units from ${formatCell(pendingPackingUnitsUpdate.row.packingUnits || 0)} to ${formatCell(pendingPackingUnitsUpdate.packingUnits)}?`}
+            confirmLabel="Confirm"
+            confirmClassName="primary-btn"
+            onCancel={() => setPendingPackingUnitsUpdate(null)}
+            onConfirm={confirmPackingUnitsUpdate}
+          />
+        )}
+        {pendingPackingHoursUpdate && (
+          <ConfirmDialog
+            title="Update packing hours?"
+            message={`Change ${pendingPackingHoursUpdate.row.name || pendingPackingHoursUpdate.row.employeeNo} packing hours from ${formatCell(pendingPackingHoursUpdate.row.packingHours || 0)} to ${formatCell(pendingPackingHoursUpdate.packingHours)}?`}
+            confirmLabel="Confirm"
+            confirmClassName="primary-btn"
+            onCancel={() => setPendingPackingHoursUpdate(null)}
+            onConfirm={confirmPackingHoursUpdate}
+          />
+        )}
+        {pendingRefresh && (
+          <ConfirmDialog
+            title="Refresh ranking?"
+            message="Refresh will clear the changes made since this page was opened and restore the previous ranking data."
+            confirmLabel="Confirm"
+            confirmClassName="primary-btn"
+            onCancel={() => setPendingRefresh(false)}
+            onConfirm={restoreRankingSnapshot}
+          />
+        )}
+        {employeeMergeAlert && (
+          <AlertDialog
+            title="Employee ID not found"
+            message={employeeMergeAlert}
+            onConfirm={() => setEmployeeMergeAlert(null)}
+          />
+        )}
+        {addingRanking && (
+          <AddRankingRowDialog
+            onCancel={() => setAddingRanking(false)}
+            onSubmit={addManualRankingRow}
+          />
+        )}
+        </ModalPortal>
       </section>
       <div className="landing-grid">
         <button className="feature-tile" onClick={() => onNavigate("efficiency")}>
@@ -387,36 +642,12 @@ export function Home({ onNavigate }) {
           <p>Share feature ideas and change requests for WorkSight</p>
         </button>
       </div>
-      {pendingDelete && (
-        <ConfirmDialog
-          title="Delete from ranking?"
-          message={`Delete ${pendingDelete.name || pendingDelete.employeeNo} from picking rankings? This person will not appear in future weekly or monthly rankings.`}
-          onCancel={() => setPendingDelete(null)}
-          onConfirm={confirmDeletePerson}
-        />
-      )}
-      {pendingNameUpdate && (
-        <ConfirmDialog
-          title="Update name?"
-          message={`Change ${pendingNameUpdate.row.employeeNo || pendingNameUpdate.row.name} from "${pendingNameUpdate.row.name || ""}" to "${pendingNameUpdate.name}"?`}
-          confirmLabel="Confirm"
-          confirmClassName="primary-btn"
-          onCancel={() => setPendingNameUpdate(null)}
-          onConfirm={confirmNameUpdate}
-        />
-      )}
-      {pendingEmployeeMerge && (
-        <ConfirmDialog
-          title="Merge employee ID?"
-          message={`Merge ${pendingEmployeeMerge.row.employeeNo || pendingEmployeeMerge.row.name} into ${pendingEmployeeMerge.targetEmployeeNo}?`}
-          confirmLabel="Confirm"
-          confirmClassName="primary-btn"
-          onCancel={() => setPendingEmployeeMerge(null)}
-          onConfirm={confirmEmployeeMerge}
-        />
-      )}
     </section>
   );
+}
+
+function ModalPortal({ container, children }) {
+  return createPortal(children, container);
 }
 
 function RankingComingSoon({ title }) {
@@ -434,7 +665,7 @@ function RankingComingSoon({ title }) {
   );
 }
 
-function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpdateName, disabled }) {
+function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpdateName, onUpdatePackingUnits, onUpdatePackingHours, onAddRow, fullscreen, onToggleFullscreen, disabled }) {
   const rows = ranking?.rows || [];
   const first = rows[0];
   const last = rows.length > 1 ? rows[rows.length - 1] : null;
@@ -443,7 +674,15 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
     <div className="ranking-card">
       <div className="ranking-card-head">
         <h2>{title}</h2>
-        {!!rows.length && <span>{rows.length} people - {ranking?.source || "database"}</span>}
+        <div className="ranking-card-actions">
+          {!!rows.length && <span>{rows.length} people - {ranking?.source || "database"}</span>}
+          <button type="button" className="ranking-icon-btn" onClick={onAddRow} disabled={disabled || !ranking} title="Add row" aria-label="Add row">
+            <Plus size={14} />
+          </button>
+          <button type="button" className="ranking-icon-btn ranking-fullscreen-btn" onClick={onToggleFullscreen} title={fullscreen ? "Exit fullscreen" : "Fullscreen table"} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen table"}>
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </div>
       </div>
       {first && (
         <div className="ranking-callouts">
@@ -505,9 +744,25 @@ function RankingTable({ title, ranking, period, onDelete, onMergeEmployee, onUpd
                     />
                   </td>
                   <td>{formatCell(row.pickingWeightedUnits ?? row.weightedUnits)}</td>
-                  <td>{formatCell(row.packingUnits || 0)}</td>
+                  <td>
+                    <PackingUnitsInput
+                      row={row}
+                      ranking={ranking}
+                      period={period}
+                      disabled={disabled}
+                      onUpdatePackingUnits={onUpdatePackingUnits}
+                    />
+                  </td>
                   <td>{formatCell(row.pickingHours ?? row.hours ?? row.effectiveHours)}</td>
-                  <td>{formatCell(row.packingHours || 0)}</td>
+                  <td>
+                    <PackingHoursInput
+                      row={row}
+                      ranking={ranking}
+                      period={period}
+                      disabled={disabled}
+                      onUpdatePackingHours={onUpdatePackingHours}
+                    />
+                  </td>
                   <td>{formatCell(row.efficiency)}</td>
                   <td>{formatPercent(row.l1Percent)}</td>
                   <td>{formatPercent(row.l2Percent)}</td>
@@ -604,6 +859,152 @@ function NameInput({ row, disabled, onUpdateName }) {
       }}
       aria-label={`Name for ${row.employeeNo || row.name}`}
     />
+  );
+}
+
+function PackingUnitsInput({ row, ranking, period, disabled, onUpdatePackingUnits }) {
+  const [value, setValue] = useState(String(row.packingUnits ?? 0));
+
+  useEffect(() => {
+    setValue(String(row.packingUnits ?? 0));
+  }, [row.packingUnits]);
+
+  async function commit() {
+    const cleanValue = value.trim();
+    const numericValue = Number(cleanValue);
+    if (!cleanValue || !Number.isFinite(numericValue) || numericValue === toNumber(row.packingUnits)) {
+      setValue(String(row.packingUnits ?? 0));
+      return;
+    }
+    const saved = await onUpdatePackingUnits?.({ row, packingUnits: numericValue, period, ranking });
+    if (!saved) setValue(String(row.packingUnits ?? 0));
+  }
+
+  return (
+    <input
+      className="ranking-number-input"
+      type="number"
+      min="0"
+      step="1"
+      value={value}
+      disabled={disabled}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setValue(String(row.packingUnits ?? 0));
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={`Packing units for ${row.name || row.employeeNo}`}
+    />
+  );
+}
+
+function PackingHoursInput({ row, ranking, period, disabled, onUpdatePackingHours }) {
+  const [value, setValue] = useState(String(row.packingHours ?? 0));
+
+  useEffect(() => {
+    setValue(String(row.packingHours ?? 0));
+  }, [row.packingHours]);
+
+  async function commit() {
+    const cleanValue = value.trim();
+    const numericValue = Number(cleanValue);
+    if (!cleanValue || !Number.isFinite(numericValue) || numericValue === toNumber(row.packingHours)) {
+      setValue(String(row.packingHours ?? 0));
+      return;
+    }
+    const saved = await onUpdatePackingHours?.({ row, packingHours: numericValue, period, ranking });
+    if (!saved) setValue(String(row.packingHours ?? 0));
+  }
+
+  return (
+    <input
+      className="ranking-number-input"
+      type="number"
+      min="0"
+      step="0.01"
+      value={value}
+      disabled={disabled}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          setValue(String(row.packingHours ?? 0));
+          event.currentTarget.blur();
+        }
+      }}
+      aria-label={`Packing hours for ${row.name || row.employeeNo}`}
+    />
+  );
+}
+
+function AddRankingRowDialog({ onCancel, onSubmit }) {
+  const [form, setForm] = useState({
+    employeeNo: "",
+    name: "",
+    packingUnits: "",
+    packingHours: "",
+    pickingWeightedUnits: "",
+    pickingHours: ""
+  });
+  const requiredMissing = !form.name.trim() || form.packingUnits === "" || form.packingHours === "";
+
+  function updateField(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function submit() {
+    if (requiredMissing) return;
+    onSubmit({
+      employeeNo: form.employeeNo.trim(),
+      name: form.name.trim(),
+      packingUnits: Number(form.packingUnits),
+      packingHours: Number(form.packingHours),
+      pickingWeightedUnits: Number(form.pickingWeightedUnits || 0),
+      pickingHours: Number(form.pickingHours || 0)
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal ranking-add-modal" role="dialog" aria-modal="true" aria-labelledby="add-ranking-title">
+        <h2 id="add-ranking-title">Add Ranking Row</h2>
+        <div className="ranking-add-grid">
+          <label>
+            <span>Employee ID</span>
+            <input value={form.employeeNo} onChange={(event) => updateField("employeeNo", event.target.value)} />
+          </label>
+          <label>
+            <span>Name *</span>
+            <input value={form.name} onChange={(event) => updateField("name", event.target.value)} />
+          </label>
+          <label>
+            <span>Packing Units *</span>
+            <input type="number" min="0" value={form.packingUnits} onChange={(event) => updateField("packingUnits", event.target.value)} />
+          </label>
+          <label>
+            <span>Packing Hours *</span>
+            <input type="number" min="0" step="0.01" value={form.packingHours} onChange={(event) => updateField("packingHours", event.target.value)} />
+          </label>
+          <label>
+            <span>Picking Weighted Units</span>
+            <input type="number" min="0" value={form.pickingWeightedUnits} onChange={(event) => updateField("pickingWeightedUnits", event.target.value)} />
+          </label>
+          <label>
+            <span>Picking Hours</span>
+            <input type="number" min="0" step="0.01" value={form.pickingHours} onChange={(event) => updateField("pickingHours", event.target.value)} />
+          </label>
+        </div>
+        <div className="modal-actions">
+          <button className="ghost-btn" onClick={onCancel}>Cancel</button>
+          <button className="primary-btn" onClick={submit} disabled={requiredMissing}>Add</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

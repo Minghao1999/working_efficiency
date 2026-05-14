@@ -292,3 +292,17 @@ export function ConfirmDialog({ title, message, confirmLabel = "Delete", confirm
     </div>
   );
 }
+
+export function AlertDialog({ title, message, confirmLabel = "OK", onConfirm }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby="alert-title">
+        <h2 id="alert-title">{title}</h2>
+        <p>{message}</p>
+        <div className="modal-actions">
+          <button className="primary-btn" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
