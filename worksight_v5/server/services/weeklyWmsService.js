@@ -657,11 +657,6 @@ async function fetchPackingRowsForDates({ dates, warehouseNo }) {
   const rows = [];
   for (const date of dates || []) {
     const rangeRows = await fetchPackingRows({ from: date, to: date, warehouseNo });
-    console.log(`[packing-ranking] ${date} -> ${date}: ${rangeRows.length} rows`);
-    if (rangeRows[0]) {
-      console.log(`[packing-ranking] sample keys: ${Object.keys(rangeRows[0]).join(", ")}`);
-      console.log(`[packing-ranking] sample row: ${JSON.stringify(rangeRows[0]).slice(0, 1000)}`);
-    }
     rows.push(...rangeRows);
   }
   return rows;
@@ -896,18 +891,10 @@ function packingTimeValue(row) {
 function summarizePackingByPerson(packingRows = []) {
   const byPerson = new Map();
   const spanByPersonDay = new Map();
-  const debugPackingKeys = new Map();
 
   for (const row of packingRows || []) {
     const person = packingPersonKey(row);
     if (!person.key) continue;
-    const rowText = JSON.stringify(row);
-    if (rowText.includes("OSJlpSVwbftE")) {
-      const debug = debugPackingKeys.get(person.key) || { rows: 0, units: 0, sample: row };
-      debug.rows += 1;
-      debug.units += packingUnitsValue(row);
-      debugPackingKeys.set(person.key, debug);
-    }
 
     const current = byPerson.get(person.key) || {
       employeeNo: person.employeeNo,
@@ -944,12 +931,6 @@ function summarizePackingByPerson(packingRows = []) {
     return acc;
   }, { people: 0, rows: 0, units: 0, hours: 0 });
   console.log(`[packing-ranking] summarized ${totals.people} people, rows=${totals.rows}, units=${totals.units}, hours=${totals.hours.toFixed(2)}`);
-  for (const row of [...byPerson.values()].sort((a, b) => (b.packingUnits || 0) - (a.packingUnits || 0)).slice(0, 15)) {
-    console.log(`[packing-ranking] person ${row.employeeNo || row.name}: rows=${row.packingRows || 0}, units=${row.packingUnits || 0}, hours=${(row.packingHours || 0).toFixed(2)}`);
-  }
-  for (const [key, debug] of debugPackingKeys.entries()) {
-    console.log(`[packing-ranking] debug OSJlpSVwbftE -> ${key}: rows=${debug.rows}, units=${debug.units}`);
-  }
 
   return byPerson;
 }
