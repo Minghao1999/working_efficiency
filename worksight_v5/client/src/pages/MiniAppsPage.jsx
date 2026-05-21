@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { ClipboardList, FileSpreadsheet, Package, Repeat, ScanBarcode, Sparkles } from "lucide-react";
+import { ClipboardList, FileSpreadsheet, Package, Repeat, ScanBarcode, Warehouse } from "lucide-react";
 import { AutomaticInventoryTransfer, GoodsPickingOutbound, NewProductTool } from "../components/mini-programs/AutomationDownloadTool";
 import { BarcodeGenerator } from "../components/mini-programs/BarcodeGenerator";
 import { PickingExceptionTool } from "../components/mini-programs/PickingExceptionTool";
+import { StorageAnalysisTool } from "../components/mini-programs/StorageAnalysisTool";
 
 const MINI_PROGRAMS = [
   {
@@ -34,6 +35,12 @@ const MINI_PROGRAMS = [
     icon: Repeat,
     title: "Inventory transfer For In-Warehouse",
     description: "PDA automatic data processing"
+  },
+  {
+    id: "storage-analysis",
+    icon: Warehouse,
+    title: "Storage analysis",
+    description: "Calculate the available storage space in A1-A24(NJ5 only)"
   }
 ];
 
@@ -62,11 +69,6 @@ export function MiniAppsPage() {
             );
           })}
 
-          <button className="feature-tile coming-soon-tile" disabled>
-            <Sparkles size={32} />
-            <h2>Batch Update</h2>
-            <p>Coming soon</p>
-          </button>
         </div>
       )}
 
@@ -75,6 +77,7 @@ export function MiniAppsPage() {
       {activeTool === "barcode" && <BarcodeGenerator onBack={() => setActiveTool("")} />}
       {activeTool === "automatic-transfer" && <AutomaticInventoryTransfer onBack={() => setActiveTool("")} />}
       {activeTool === "goods-picking" && <GoodsPickingOutbound onBack={() => setActiveTool("")} />}
+      {activeTool === "storage-analysis" && <StorageAnalysisTool onBack={() => setActiveTool("")} />}
     </section>
   );
 }
