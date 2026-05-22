@@ -378,7 +378,6 @@ export function StorageAnalysisTool({ onBack }) {
           <div className="automation-card wide">
             <div className="table-head storage-table-head">
               <h2>每层空间统计</h2>
-              <span>识别列：非空储位 {result.columns.usedLocationCol}，空储位 {result.columns.emptyLocationCol}，长度 {result.columns.lengthCol}</span>
             </div>
             <div className="table-wrap">
               <table className="compact-table">

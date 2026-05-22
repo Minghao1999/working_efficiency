@@ -19,6 +19,12 @@ from PySide6.QtWidgets import (
 )
 
 ADB = r"C:\Users\sun98\OneDrive\Desktop\working efficiency\tools\platform-tools\adb.exe"
+
+SUBPROCESS_KWARGS = {}
+if sys.platform == "win32":
+    SUBPROCESS_KWARGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+
 class PDAWindow(QWidget):
     log_signal = Signal(str)
     clear_task_order_signal = Signal()
@@ -105,7 +111,8 @@ class PDAWindow(QWidget):
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            errors="ignore"
+            errors="ignore",
+            **SUBPROCESS_KWARGS
         )
 
         return result.stdout.strip()
@@ -120,7 +127,8 @@ class PDAWindow(QWidget):
             stderr=subprocess.PIPE,
             encoding="utf-8",
             errors="ignore",
-            text=True
+            text=True,
+            **SUBPROCESS_KWARGS
         )
 
         lines = result.stdout.splitlines()
