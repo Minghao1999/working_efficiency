@@ -26,11 +26,29 @@ const TARGET_UPPH_BY_WAREHOUSE = {
 };
 
 function todayDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = values.year;
+  const month = values.month;
+  const day = values.day;
   return `${year}-${month}-${day}`;
+}
+
+function isEasternAutoRefreshWindow(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const minutes = (Number(values.hour) || 0) * 60 + (Number(values.minute) || 0);
+  return minutes >= 8 * 60 && minutes <= 16 * 60 + 30;
 }
 
 function dateKeysBetween(from, to) {
@@ -634,6 +652,15 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
+    const timer = setInterval(() => {
+      if (isEasternAutoRefreshWindow()) {
+        setRefreshKey((current) => current + 1);
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -684,7 +711,7 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
         </button>
       </div>
 
-      {loading && <ProgressBar value={72} label="Loading current picking task status..." />}
+      {loading && !rows.length && <ProgressBar value={72} label="Loading current picking task status..." />}
       {error && <div className="error">{error}</div>}
 
       <div className="kpi-grid task-status-kpis">
