@@ -203,12 +203,21 @@ export function GlassSelect({ value, options, onChange, onRemoveOption, classNam
       {open && (
         <div className="glass-select-menu">
           {normalizedOptions.map((option) => (
-            <div key={option.value} className={option.value === selected.value ? "glass-select-option active" : "glass-select-option"}>
+            <div
+              key={option.value}
+              className={[
+                "glass-select-option",
+                option.value === selected.value ? "active" : "",
+                option.disabled ? "disabled" : ""
+              ].filter(Boolean).join(" ")}
+            >
               <button
                 type="button"
                 className="glass-select-option-main"
+                disabled={option.disabled}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
+                  if (option.disabled) return;
                   onChange(option.value);
                   setOpen(false);
                 }}

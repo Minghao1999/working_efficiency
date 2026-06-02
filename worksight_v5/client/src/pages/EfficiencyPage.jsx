@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Boxes, FileSpreadsheet, Package, RotateCcw, Timer, Users } from "lucide-react";
+import { Boxes, CalendarDays, CheckCircle2, FileSpreadsheet, Package, RotateCcw, Timer, Users } from "lucide-react";
 import { API } from "../constants";
 import { ChartPanel, DateRangeQuery, FilePicker, GlassSelect, Metric, ProgressBar, SelectLine, SelectedFileList, Tabs, UploadBox } from "../components/controls";
 import { DataTable, EditablePersonTable } from "../components/tables";
@@ -13,11 +13,25 @@ const WAREHOUSE_OPTIONS = [
   { value: "5", label: "Warehouse 5" }
 ];
 
+const CURRENT_TASK_WAREHOUSE_OPTIONS = [
+  { value: "1", label: "Warehouse 1", disabled: true },
+  { value: "2", label: "Warehouse 2", disabled: true },
+  { value: "5", label: "Warehouse 5" }
+];
+
 const TARGET_UPPH_BY_WAREHOUSE = {
   "1": 34.57,
   "2": 37.11,
   "5": 11.3
 };
+
+function todayDateKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function dateKeysBetween(from, to) {
   if (!from || !to) return [];
@@ -109,6 +123,13 @@ function pickingFilesSignature(files) {
   return files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join("|");
 }
 
+function formatTaskDuration(minutes) {
+  const safeMinutes = Math.max(0, Number(minutes) || 0);
+  const hours = Math.floor(safeMinutes / 60);
+  const remainingMinutes = safeMinutes % 60;
+  return hours ? `${hours}h ${remainingMinutes}m` : `${remainingMinutes}m`;
+}
+
 async function readApiJson(response) {
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return response.json();
@@ -152,6 +173,7 @@ export function EfficiencyPage() {
   const [deleted, setDeleted] = useState(new Set());
   const [pickRange, setPickRange] = useState({ from: "", to: "" });
   const [warehouse, setWarehouse] = useState("5");
+  const [taskStatusWarehouse, setTaskStatusWarehouse] = useState("5");
   const pickingRequestSeq = useRef(0);
   const targetUpph = TARGET_UPPH_BY_WAREHOUSE[warehouse] || "";
 
@@ -489,6 +511,13 @@ export function EfficiencyPage() {
         </>
       )}
 
+      {view === "task-status" && (
+        <CurrentPickingTaskStatus
+          warehouse={taskStatusWarehouse}
+          onWarehouseChange={setTaskStatusWarehouse}
+        />
+      )}
+
       {view === "picking" && (
         <>
           <div className="upload-grid picking-upload-grid">
@@ -587,11 +616,131 @@ export function EfficiencyPage() {
 }
 
 function HeaderViewToggle({ value, onChange }) {
+  const activeIndex = value === "dashboard" ? 0 : value === "picking" ? 1 : 2;
   return (
-    <div className="segmented compact sliding page-view-toggle" style={{ "--active-index": value === "dashboard" ? 0 : 1, "--segment-count": 2 }}>
+    <div className="segmented compact sliding page-view-toggle" style={{ "--active-index": activeIndex, "--segment-count": 3 }}>
       <button type="button" className={value === "dashboard" ? "active" : ""} onClick={() => onChange("dashboard")}>Work Efficiency</button>
       <button type="button" className={value === "picking" ? "active" : ""} onClick={() => onChange("picking")}>Picking Efficiency</button>
+      <button type="button" className={value === "task-status" ? "active" : ""} onClick={() => onChange("task-status")}>Current Picking Task Status</button>
     </div>
+  );
+}
+
+function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
+  const currentDate = todayDateKey();
+  const [apiRows, setApiRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    fetch(`${API}/api/weekly/current-picking-task-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ warehouse, date: currentDate }),
+      signal: controller.signal
+    })
+      .then(async (res) => {
+        const json = await readApiJson(res);
+        if (!res.ok) throw json;
+        setApiRows(json.rows || []);
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") setError(formatUploadError(e));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [warehouse, currentDate, refreshKey]);
+
+  const rows = apiRows;
+  const totalCompleted = rows.reduce((sum, row) => sum + row.completedTasks, 0);
+
+  return (
+    <>
+      <div className="toolbar task-status-toolbar">
+        <label>
+          Warehouse
+          <GlassSelect
+            value={warehouse}
+            options={CURRENT_TASK_WAREHOUSE_OPTIONS}
+            onChange={onWarehouseChange}
+            className="warehouse-query-select"
+          />
+        </label>
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={() => setRefreshKey((current) => current + 1)}
+          disabled={loading}
+          title="Refresh current picking task status"
+        >
+          <RotateCcw size={16} /> Refresh
+        </button>
+      </div>
+
+      {loading && <ProgressBar value={72} label="Loading current picking task status..." />}
+      {error && <div className="error">{error}</div>}
+
+      <div className="kpi-grid task-status-kpis">
+        <Metric icon={<Boxes />} label="WAREHOUSE" value={`Warehouse ${warehouse}`} />
+        <Metric icon={<Users />} label="ACTIVE PICKERS" value={rows.length} />
+        <Metric icon={<CheckCircle2 />} label="COMPLETED TASKS" value={totalCompleted} />
+        <Metric icon={<CalendarDays />} label="DATE" value={currentDate} />
+      </div>
+
+      <div className="panel">
+        <div className="table-head">
+          <h2>Current Picking Task Status</h2>
+          <span className="hint-line">{currentDate}</span>
+        </div>
+        <div className="table-wrap current-task-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Completed Tasks</th>
+                <th>Current Picked Qty</th>
+                <th>Current Task Total Qty</th>
+                <th>Task Duration</th>
+                <th>Completion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const progress = row.totalQty ? row.pickedQty / row.totalQty : null;
+                const percent = progress == null ? null : Math.round(progress * 100);
+                return (
+                  <tr key={`${warehouse}-${row.employeeNo || row.name}-${row.currentTaskNo || ""}`}>
+                    <td><strong>{row.name}</strong></td>
+                    <td>{row.completedTasks}</td>
+                    <td>{row.pickedQty}</td>
+                    <td>{row.totalQty ?? "-"}</td>
+                    <td>{row.taskDuration || formatTaskDuration(row.startedMinutesAgo)}</td>
+                    <td>
+                      <div className="task-progress-cell">
+                        <div className="task-progress-track" aria-label={percent == null ? "Completion unavailable" : `${percent}% complete`}>
+                          <span style={{ width: `${percent == null ? 0 : Math.min(100, Math.max(0, percent))}%` }} />
+                        </div>
+                        <strong>{percent == null ? "-" : `${percent}%`}</strong>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {!loading && !rows.length && !error && (
+          <div className="empty">No current picking task status found for today.</div>
+        )}
+      </div>
+    </>
   );
 }
 

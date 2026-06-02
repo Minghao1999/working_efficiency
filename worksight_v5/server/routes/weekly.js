@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { analyzeWeekly } from "../services/weeklyService.js";
-import { addPickingRankingRow, excludePickingRankingPerson, mergePickingRankingEmployee, queryPickingData, queryPickingRankings, queryUnitData, restorePickingRankingSnapshot, updatePickingRankingEmployeeName, updatePickingRankingRow } from "../services/weeklyWmsService.js";
+import { addPickingRankingRow, excludePickingRankingPerson, mergePickingRankingEmployee, queryCurrentPickingTaskStatus, queryPickingData, queryPickingRankings, queryUnitData, restorePickingRankingSnapshot, updatePickingRankingEmployeeName, updatePickingRankingRow } from "../services/weeklyWmsService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -43,6 +43,15 @@ router.post("/query-picking", async (req, res) => {
   try {
     const { from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick } = req.body || {};
     res.json(await queryPickingData({ from, to, warehouse, warehouseNo, targetUpph, includeBigWavePick }));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
+  }
+});
+
+router.post("/current-picking-task-status", async (req, res) => {
+  try {
+    const { warehouse, warehouseNo, date } = req.body || {};
+    res.json(await queryCurrentPickingTaskStatus({ warehouse, warehouseNo, date }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, details: error.details || undefined });
   }

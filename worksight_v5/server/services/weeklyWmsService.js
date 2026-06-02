@@ -3,6 +3,7 @@ import { getDb } from "./mongo.js";
 import { analyzePickRows } from "./weeklyService.js";
 
 const WMS_URL = "https://iwms.us.jdlglobal.com/reportApi/services/smartQueryWS?wsdl";
+const OUTBOUND_PICKING_WMS_URL = "https://iwms.us.jdlglobal.com/outboundApi/picking/services/pickingWS?wsdl";
 
 const DEFAULT_WMS_USER = "minghao.sun@jd.com";
 const DEFAULT_WMS_WK_NO = "jdhk_ulXbWlUMYeET";
@@ -98,6 +99,13 @@ function todayKey() {
   return dayKey(new Date());
 }
 
+function formatDurationFromHours(hours) {
+  const totalMinutes = Math.max(0, Math.round(num(hours, 0) * 60));
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return wholeHours ? `${wholeHours}h ${minutes}m` : `${minutes}m`;
+}
+
 function cacheStatusForDate(date) {
   if (date < todayKey()) return "final";
   if (date === todayKey()) return "provisional";
@@ -163,13 +171,16 @@ function parseResponseText(xmlText) {
 }
 
 function getRows(result) {
-  let rows = result.data || result.rows || result.list || result.result || [];
+  let rows = result.data || result.rows || result.list || result.result || result.resultList || [];
   if (typeof rows === "string") {
     try {
       rows = JSON.parse(rows);
     } catch {
       rows = [];
     }
+  }
+  if (rows && !Array.isArray(rows) && typeof rows === "object") {
+    rows = rows.data || rows.rows || rows.list || rows.result || rows.records || rows.resultList || [];
   }
   return Array.isArray(rows) ? rows : [];
 }
@@ -420,6 +431,45 @@ function buildPickingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSiz
   return buildSoapEnvelope(arg0, arg1);
 }
 
+function buildCurrentTaskListBody({ from, to, warehouseNo, startRow = 1, pageSize = 1000 }) {
+  const { startTime, endTime } = normalizeDateRange(from, to);
+  const arg0 = {
+    bizType: "wms_ob_getTaskMList",
+    uuid: "uuid",
+    callCode: "360BUY.WMS3.WS.CALLCODE.10401"
+  };
+  const arg1 = {
+    groupNo: "",
+    taskPageType: "",
+    batchNo: "",
+    taskPageNo: "",
+    outboundNo: "",
+    optStatusList: [0, 1],
+    printFlag: "",
+    mergeFlag: "",
+    createBeginTime: startTime,
+    createEndTime: endTime,
+    orderType: "",
+    taskPageTypeList: [],
+    scheduleBillCode: "",
+    thirdOwnerList: [],
+    waveType: "",
+    handoverGroup: null,
+    carrierNoList: [],
+    productionEndTimeStart: null,
+    productionEndTimeEnd: null,
+    goodsSortFlag: null,
+    groupName: "",
+    startRow,
+    pageSize,
+    ownerNoList: [],
+    orgNo: process.env.WMS_ORG_NO || "1",
+    distributeNo: process.env.WMS_DISTRIBUTE_NO || "1",
+    warehouseNo
+  };
+  return buildSoapEnvelope(arg0, arg1);
+}
+
 function buildPackingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSize = 100 }) {
   const { startTime, endTime } = normalizeDateRange(from, to);
   const arg0 = {
@@ -454,11 +504,11 @@ function buildPackingQueryBody({ from, to, warehouseNo, currentPage = 1, pageSiz
   return buildSoapEnvelope(arg0, arg1);
 }
 
-async function postWms(body, warehouseNo) {
+async function postWms(body, warehouseNo, url = WMS_URL) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
   try {
-    const response = await fetch(WMS_URL, {
+    const response = await fetch(url, {
       method: "POST",
       headers: wmsHeaders(warehouseNo),
       body,
@@ -615,6 +665,218 @@ function normalizePickingRows(rows) {
   }));
 }
 
+function currentPickingTaskFields(row) {
+  const taskNo = String(readAny(row, [
+    "任务单号",
+    "集合单号",
+    "taskPageNo",
+    "task_page_no",
+    "pickingTaskNo",
+    "picking_task_no",
+    "taskNo",
+    "task_no",
+    "outboundNo",
+    "waveNo",
+    "wave_no",
+    "batchNo"
+  ]) || "").trim();
+  const employeeNo = String(readAny(row, [
+    "工号",
+    "员工号",
+    "employeeNo",
+    "employee_no",
+    "operatorNo",
+    "operator_no"
+  ]) || "").trim();
+  const name = String(readAny(row, [
+    "姓名",
+    "员工姓名",
+    "workerName",
+    "worker_name",
+    "employeeName",
+    "employee_name",
+    "operatorName",
+    "operator_name",
+    "realName"
+  ]) || "").trim();
+  const email = String(readAny(row, [
+    "邮箱",
+    "email",
+    "mail",
+    "userEmail",
+    "user_email",
+    "employeeEmail",
+    "employee_email",
+    "UserName",
+    "userName"
+  ]) || "").trim();
+  const loginName = String(readAny(row, ["updateUser", "update_user", "WkNo", "wkNo"]) || "").trim();
+  const fallbackEmail = [email, employeeNo, loginName].find((value) => value.includes("@")) || "";
+  const pickedQty = num(readAny(row, [
+    "实际拣货量",
+    "拣货数量",
+    "拣货件数",
+    "实际件数",
+    "pickingQty",
+    "picking_qty",
+    "actualPickingQty",
+    "actual_picking_qty",
+    "actualQty",
+    "actual_qty",
+    "GOODS_SUM",
+    "goodsSum",
+    "locateQty",
+    "qty",
+    "quantity"
+  ]), 0);
+  const receiveTime = parseDate(readAny(row, [
+    "任务领取时间",
+    "拣货开始时间",
+    "领取时间",
+    "receiveTime",
+    "receive_time",
+    "fetchTime",
+    "fetch_time",
+    "startTime",
+    "start_time",
+    "createTime"
+  ]));
+  const completionTime = parseDate(readAny(row, [
+    "拣货完成时间",
+    "完成时间",
+    "updateTime",
+    "update_time",
+    "pickingDate",
+    "pickingTime",
+    "endTime",
+    "end_time",
+    "finishTime",
+    "finish_time"
+  ]));
+  return { taskNo, employeeNo, name: name || fallbackEmail, pickedQty, receiveTime, completionTime };
+}
+
+function currentTaskTotalFields(row) {
+  const taskNo = String(readAny(row, [
+    "任务单号",
+    "集合单号",
+    "taskPageNo",
+    "task_page_no",
+    "taskNo",
+    "task_no",
+    "pickingTaskNo",
+    "picking_task_no",
+    "outboundNo",
+    "batchNo"
+  ]) || "").trim();
+  const totalQty = num(readAny(row, [
+    "总件数",
+    "件数",
+    "商品件数",
+    "商品总数",
+    "计划件数",
+    "应拣件数",
+    "任务件数",
+    "totalQty",
+    "total_qty",
+    "qty",
+    "quantity",
+    "goodsQty",
+    "goods_qty",
+    "goodsNum",
+    "goods_num",
+    "goodsSum",
+    "goods_sum",
+    "containerTotalQty",
+    "container_total_qty",
+    "planQty",
+    "plan_qty",
+    "expectQty",
+    "expect_qty",
+    "skuQty",
+    "sku_qty"
+  ]), 0);
+  return { taskNo, totalQty };
+}
+
+function buildCurrentTaskTotalMap(rows) {
+  const taskTotals = new Map();
+  for (const row of rows || []) {
+    const { taskNo, totalQty } = currentTaskTotalFields(row);
+    if (!taskNo || !totalQty) continue;
+    taskTotals.set(taskNo, totalQty);
+  }
+  return taskTotals;
+}
+
+function buildCurrentPickingTaskStatus(rows, date, warehouse, taskTotalMap = new Map()) {
+  const personTasks = new Map();
+
+  for (const row of rows || []) {
+    const item = currentPickingTaskFields(row);
+    if (!item.taskNo || !item.completionTime) continue;
+    const personKey = item.employeeNo || item.name;
+    if (!personKey) continue;
+    if (date && dayKey(item.completionTime) !== date) continue;
+
+    const taskKey = `${personKey}|${item.taskNo}`;
+    const task = personTasks.get(taskKey) || {
+      taskNo: item.taskNo,
+      employeeNo: item.employeeNo,
+      name: item.name || item.employeeNo,
+      pickedQty: 0,
+      receiveTime: item.receiveTime,
+      completionTime: item.completionTime
+    };
+    task.pickedQty += item.pickedQty;
+    if (item.name && (!task.name || task.name === task.employeeNo)) task.name = item.name;
+    if (item.employeeNo && !task.employeeNo) task.employeeNo = item.employeeNo;
+    if (item.receiveTime && (!task.receiveTime || item.receiveTime < task.receiveTime)) task.receiveTime = item.receiveTime;
+    if (item.completionTime && (!task.completionTime || item.completionTime > task.completionTime)) task.completionTime = item.completionTime;
+    personTasks.set(taskKey, task);
+  }
+
+  const byPerson = new Map();
+  for (const task of personTasks.values()) {
+    const personKey = task.employeeNo || task.name;
+    const person = byPerson.get(personKey) || {
+      employeeNo: task.employeeNo,
+      name: task.name,
+      tasks: []
+    };
+    person.tasks.push(task);
+    if (task.name && (!person.name || person.name === person.employeeNo)) person.name = task.name;
+    if (task.employeeNo && !person.employeeNo) person.employeeNo = task.employeeNo;
+    byPerson.set(personKey, person);
+  }
+
+  return [...byPerson.values()]
+    .map((person) => {
+      const tasks = person.tasks.sort((a, b) => (b.completionTime || 0) - (a.completionTime || 0));
+      const current = tasks[0];
+      const durationHours = current?.receiveTime && current?.completionTime
+        ? (current.completionTime - current.receiveTime) / 3600000
+        : 0;
+      return {
+        date,
+        warehouse,
+        employeeNo: person.employeeNo || "",
+        name: person.name || person.employeeNo || "",
+        completedTasks: tasks.length,
+        currentTaskNo: current?.taskNo || "",
+        pickedQty: current?.pickedQty || 0,
+        totalQty: taskTotalMap.get(current?.taskNo || "") || null,
+        taskDuration: formatDurationFromHours(durationHours),
+        startedMinutesAgo: Math.max(0, Math.round(durationHours * 60)),
+        completionPercent: taskTotalMap.get(current?.taskNo || "")
+          ? ((current?.pickedQty || 0) / taskTotalMap.get(current?.taskNo || "")) * 100
+          : null,
+        latestCompletionTime: current?.completionTime?.toISOString?.() || ""
+      };
+    })
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }));
+}
+
 async function fetchPickingRows({ from, to, warehouseNo, bigWave = false }) {
   const pageSize = bigWave ? 100 : 1000;
   const rows = [];
@@ -731,6 +993,48 @@ export async function queryPickingData({ from, to, warehouse, warehouseNo = DEFA
     regularRawCount: regularRows.length,
     bigWaveRawCount: bigWaveRows.length,
     cacheStatus
+  };
+}
+
+async function fetchCurrentTaskListRows({ from, to, warehouseNo }) {
+  const pageSize = 10;
+  const maxPages = 50;
+  const rows = [];
+
+  for (let page = 0; page < maxPages; page++) {
+    const startRow = page + 1;
+    const result = await postWms(
+      buildCurrentTaskListBody({ from, to, warehouseNo, startRow, pageSize }),
+      warehouseNo,
+      OUTBOUND_PICKING_WMS_URL
+    );
+    const pageRows = getRows(result);
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+
+  return rows;
+}
+
+export async function queryCurrentPickingTaskStatus({ warehouse = "5", warehouseNo = DEFAULT_WAREHOUSE_NO, date = todayKey() } = {}) {
+  const warehouseKey = String(warehouse || "5").trim();
+  if (warehouseKey !== "5") {
+    const error = new Error("Current picking task status is currently available for Warehouse 5 only.");
+    error.status = 400;
+    throw error;
+  }
+  const cleanWarehouseNo = resolveWarehouseNo(warehouseKey, warehouseNo);
+  const rows = await fetchPickingRows({ from: date, to: date, warehouseNo: cleanWarehouseNo });
+  const taskListRows = await fetchCurrentTaskListRows({ from: date, to: date, warehouseNo: cleanWarehouseNo });
+  const taskTotalMap = buildCurrentTaskTotalMap(taskListRows);
+  return {
+    date,
+    warehouse: warehouseKey,
+    warehouseNo: cleanWarehouseNo,
+    rows: buildCurrentPickingTaskStatus(rows, date, warehouseKey, taskTotalMap),
+    rawCount: rows.length,
+    taskListRawCount: taskListRows.length,
+    source: "wms"
   };
 }
 
