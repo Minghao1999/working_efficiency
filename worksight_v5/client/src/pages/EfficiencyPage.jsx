@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Boxes, CalendarDays, CheckCircle2, FileSpreadsheet, Package, RotateCcw, Timer, Users } from "lucide-react";
+import { Boxes, CalendarDays, CheckCircle2, ChevronDown, FileSpreadsheet, Package, RotateCcw, Timer, Users } from "lucide-react";
 import { API } from "../constants";
 import { ChartPanel, DateRangeQuery, FilePicker, GlassSelect, Metric, ProgressBar, SelectLine, SelectedFileList, Tabs, UploadBox } from "../components/controls";
 import { DataTable, EditablePersonTable } from "../components/tables";
@@ -146,6 +146,29 @@ function formatTaskDuration(minutes) {
   const hours = Math.floor(safeMinutes / 60);
   const remainingMinutes = safeMinutes % 60;
   return hours ? `${hours}h ${remainingMinutes}m` : `${remainingMinutes}m`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(date);
+}
+
+function parseDurationMinutes(value) {
+  if (!value) return null;
+  const text = String(value);
+  const hours = Number(text.match(/(\d+)\s*h/)?.[1] || 0);
+  const minutes = Number(text.match(/(\d+)\s*m/)?.[1] || 0);
+  const total = hours * 60 + minutes;
+  return Number.isFinite(total) ? total : null;
 }
 
 async function readApiJson(response) {
@@ -650,6 +673,7 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [expandedPeople, setExpandedPeople] = useState(new Set());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -687,6 +711,14 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
 
   const rows = apiRows;
   const totalCompleted = rows.reduce((sum, row) => sum + row.completedTasks, 0);
+
+  function togglePersonHistory(rowKey) {
+    setExpandedPeople((current) => {
+      const next = new Set(current);
+      next.has(rowKey) ? next.delete(rowKey) : next.add(rowKey);
+      return next;
+    });
+  }
 
   return (
     <>
@@ -742,22 +774,44 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
               {rows.map((row) => {
                 const progress = row.totalQty ? row.pickedQty / row.totalQty : null;
                 const percent = progress == null ? null : Math.round(progress * 100);
+                const rowKey = `${warehouse}-${row.employeeNo || row.name}-${row.currentTaskNo || ""}`;
+                const expanded = expandedPeople.has(rowKey);
                 return (
-                  <tr key={`${warehouse}-${row.employeeNo || row.name}-${row.currentTaskNo || ""}`}>
-                    <td><strong>{row.name}</strong></td>
-                    <td>{row.completedTasks}</td>
-                    <td>{row.pickedQty}</td>
-                    <td>{row.totalQty ?? "-"}</td>
-                    <td>{row.taskDuration || formatTaskDuration(row.startedMinutesAgo)}</td>
-                    <td>
-                      <div className="task-progress-cell">
-                        <div className="task-progress-track" aria-label={percent == null ? "Completion unavailable" : `${percent}% complete`}>
-                          <span style={{ width: `${percent == null ? 0 : Math.min(100, Math.max(0, percent))}%` }} />
+                  <React.Fragment key={rowKey}>
+                    <tr>
+                      <td>
+                        <button
+                          type="button"
+                          className={expanded ? "person-history-toggle expanded" : "person-history-toggle"}
+                          onClick={() => togglePersonHistory(rowKey)}
+                          disabled={!row.historyTasks?.length}
+                          title="Show completed task history"
+                        >
+                          <ChevronDown size={15} />
+                          <strong>{row.name}</strong>
+                        </button>
+                      </td>
+                      <td>{row.completedTasks}</td>
+                      <td>{row.pickedQty}</td>
+                      <td>{row.totalQty ?? "-"}</td>
+                      <td>{row.taskDuration || formatTaskDuration(row.startedMinutesAgo)}</td>
+                      <td>
+                        <div className="task-progress-cell">
+                          <div className="task-progress-track" aria-label={percent == null ? "Completion unavailable" : `${percent}% complete`}>
+                            <span style={{ width: `${percent == null ? 0 : Math.min(100, Math.max(0, percent))}%` }} />
+                          </div>
+                          <strong>{percent == null ? "-" : `${percent}%`}</strong>
                         </div>
-                        <strong>{percent == null ? "-" : `${percent}%`}</strong>
-                      </div>
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="history-row">
+                        <td colSpan={6}>
+                          <TaskHistory rows={row.historyTasks || []} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -769,6 +823,61 @@ function CurrentPickingTaskStatus({ warehouse, onWarehouseChange }) {
       </div>
     </>
   );
+}
+
+function RatioBar({ value, type = "" }) {
+  if (value == null || Number.isNaN(value)) {
+    return <span className="ratio-empty">-</span>;
+  }
+  const safeValue = Math.min(100, Math.max(0, value));
+  const level = safeValue >= 30 ? "high" : safeValue >= 15 ? "medium" : "low";
+  return (
+    <div className={`ratio-cell ${type} ${level}`}>
+      <div className="ratio-track" aria-label={`${safeValue}%`}>
+        <span style={{ width: `${safeValue}%` }} />
+      </div>
+      <strong>{safeValue}%</strong>
+    </div>
+  );
+}
+
+function TaskHistory({ rows }) {
+  if (!rows.length) return <div className="empty">No completed task history.</div>;
+  return (
+    <div className="task-history-panel">
+      <table className="task-history-table">
+        <thead>
+          <tr>
+            <th>Task No</th>
+            <th>Picked Qty</th>
+            <th>Duration</th>
+            <th>Idle Time</th>
+            <th>Start Time</th>
+            <th>End Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((task) => (
+            <tr key={task.taskNo}>
+              <td>{task.taskNo || "-"}</td>
+              <td>{task.pickedQty ?? "-"}</td>
+              <td>{task.taskDuration || "-"}</td>
+              <td><IdleTimeBadge minutes={task.idleMinutes} label={task.idleTime} /></td>
+              <td>{formatDateTime(task.startTime)}</td>
+              <td>{formatDateTime(task.endTime)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function IdleTimeBadge({ minutes, label }) {
+  const displayMinutes = minutes ?? parseDurationMinutes(label);
+  if (displayMinutes == null || !label) return <span className="idle-time-badge empty">-</span>;
+  const level = displayMinutes >= 15 ? "high" : displayMinutes >= 5 ? "medium" : "low";
+  return <span className={`idle-time-badge ${level}`}>{label}</span>;
 }
 
 function WarehouseMetric({ value, onChange }) {

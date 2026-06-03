@@ -854,9 +854,45 @@ function buildCurrentPickingTaskStatus(rows, date, warehouse, taskTotalMap = new
     .map((person) => {
       const tasks = person.tasks.sort((a, b) => (b.completionTime || 0) - (a.completionTime || 0));
       const current = tasks[0];
+      const previous = tasks.find((task) => (
+        task.taskNo !== current?.taskNo &&
+        task.completionTime &&
+        current?.receiveTime &&
+        task.completionTime <= current.receiveTime
+      ));
       const durationHours = current?.receiveTime && current?.completionTime
         ? (current.completionTime - current.receiveTime) / 3600000
         : 0;
+      const idleHours = previous?.completionTime && current?.receiveTime
+        ? Math.max(0, (current.receiveTime - previous.completionTime) / 3600000)
+        : null;
+      const idleRatio = idleHours != null && (idleHours + durationHours) > 0
+        ? (idleHours / (idleHours + durationHours)) * 100
+        : null;
+      const historyTaskSource = [...tasks].sort((a, b) => (
+        (a.receiveTime || a.completionTime || 0) - (b.receiveTime || b.completionTime || 0)
+      ));
+      const historyTasks = historyTaskSource.map((task, index) => {
+        const previousTask = index > 0 ? historyTaskSource[index - 1] : null;
+        const taskHours = task.receiveTime && task.completionTime
+          ? (task.completionTime - task.receiveTime) / 3600000
+          : 0;
+        const taskIdleHours = previousTask?.completionTime && task.receiveTime
+          ? Math.max(0, (task.receiveTime - previousTask.completionTime) / 3600000)
+          : null;
+        const taskIdleRatio = taskIdleHours != null && (taskIdleHours + taskHours) > 0
+          ? (taskIdleHours / (taskIdleHours + taskHours)) * 100
+          : null;
+        return {
+          taskNo: task.taskNo || "",
+          pickedQty: task.pickedQty || 0,
+          taskDuration: formatDurationFromHours(taskHours),
+          idleTime: taskIdleHours == null ? "" : formatDurationFromHours(taskIdleHours),
+          idleMinutes: taskIdleHours == null ? null : Math.max(0, Math.round(taskIdleHours * 60)),
+          startTime: task.receiveTime?.toISOString?.() || "",
+          endTime: task.completionTime?.toISOString?.() || ""
+        };
+      });
       return {
         date,
         warehouse,
@@ -868,10 +904,13 @@ function buildCurrentPickingTaskStatus(rows, date, warehouse, taskTotalMap = new
         totalQty: taskTotalMap.get(current?.taskNo || "") || null,
         taskDuration: formatDurationFromHours(durationHours),
         startedMinutesAgo: Math.max(0, Math.round(durationHours * 60)),
+        idleTime: idleHours == null ? "" : formatDurationFromHours(idleHours),
+        idleRatio,
         completionPercent: taskTotalMap.get(current?.taskNo || "")
           ? ((current?.pickedQty || 0) / taskTotalMap.get(current?.taskNo || "")) * 100
           : null,
-        latestCompletionTime: current?.completionTime?.toISOString?.() || ""
+        latestCompletionTime: current?.completionTime?.toISOString?.() || "",
+        historyTasks
       };
     })
     .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }));

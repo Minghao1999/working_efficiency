@@ -172,6 +172,144 @@ main {
   text-align: right;
 }
 
+.ratio-cell {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) 42px;
+  align-items: center;
+  gap: 9px;
+  min-width: 150px;
+}
+
+.ratio-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef2f6;
+}
+
+.ratio-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.ratio-cell.low .ratio-track span {
+  background: #16a34a;
+}
+
+.ratio-cell.medium .ratio-track span {
+  background: #f59e0b;
+}
+
+.ratio-cell.high .ratio-track span {
+  background: #dc2626;
+}
+
+.ratio-cell strong,
+.ratio-empty {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ratio-cell strong {
+  text-align: right;
+}
+
+.person-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+  color: #111827;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.person-history-toggle svg {
+  color: #475467;
+  transition: transform 160ms ease;
+}
+
+.person-history-toggle.expanded svg {
+  transform: rotate(180deg);
+}
+
+.person-history-toggle:disabled {
+  cursor: default;
+}
+
+.person-history-toggle:disabled svg {
+  opacity: 0.28;
+}
+
+.history-row td {
+  background: #eef2f6;
+  padding: 10px;
+}
+
+.task-history-panel {
+  overflow: auto;
+  border: 1px solid rgba(120, 144, 180, 0.3);
+  border-radius: 10px;
+  background: #f3f6fa;
+}
+
+.task-history-table {
+  background: #f3f6fa;
+}
+
+.task-history-table th {
+  background: #e5ebf3;
+}
+
+.task-history-table td {
+  background: #f7f9fc;
+}
+
+.task-history-table th,
+.task-history-table td {
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.idle-time-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.idle-time-badge.low {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.idle-time-badge.medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.idle-time-badge.high {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.idle-time-badge.empty {
+  background: transparent;
+  color: #667085;
+  padding: 0;
+  min-width: 0;
+}
+
 .landing-grid,
 .upload-grid,
 .kpi-grid {
